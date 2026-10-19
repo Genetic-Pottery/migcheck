@@ -15,7 +15,10 @@ import tempfile
 import time
 from collections import defaultdict
 
-from .postgres import DEFAULT_IMAGE, Postgres
+from .mysql import MySQL
+from .postgres import Postgres
+
+ADAPTERS = {"postgres": Postgres, "mysql": MySQL}
 
 
 def main():
@@ -25,54 +28,61 @@ def main():
     parser.add_argument("--head", required=True, help="ref of the release being deployed")
     parser.add_argument("--migrate", required=True, help="shell command that applies migrations to $DATABASE_URL")
     parser.add_argument("--workload", required=True, help="shell command that exercises the app against $DATABASE_URL, such as its test suite")
-    parser.add_argument("--image", default=DEFAULT_IMAGE, help=f"Postgres Docker image (default: {DEFAULT_IMAGE})")
+    parser.add_argument("--db", choices=ADAPTERS, default="postgres", help="database the app uses (default: postgres)")
+    defaults = " or ".join(a.default_image for a in ADAPTERS.values())
+    parser.add_argument("--image", help=f"database Docker image (default: {defaults})")
     args = parser.parse_args()
 
     repo = os.path.abspath(args.repo)
     workdir = tempfile.mkdtemp(prefix="migcheck-")
     base_dir = os.path.join(workdir, "base")
     head_dir = os.path.join(workdir, "head")
-    pg = Postgres(args.image)
+    adapter = ADAPTERS[args.db]
+    db = adapter(args.image or adapter.default_image)
     try:
         _git(repo, "worktree", "add", "--detach", "-q", base_dir, args.base)
         _git(repo, "worktree", "add", "--detach", "-q", head_dir, args.head)
 
-        step(f"Starting {args.image}")
-        pg.start()
+        step(f"Starting {db.image}")
+        db.start()
 
         step(f"Applying {args.base} migrations")
-        pg.create_db("mc_template")
-        _sh(args.migrate, base_dir, pg.url("mc_template"))
+        db.create_db("mc_template")
+        _sh(args.migrate, base_dir, db.url("mc_template"))
 
         step(f"Recording {args.base} workload queries")
-        pg.create_db("mc_capture", template="mc_template")
+        db.create_db("mc_capture", template="mc_template")
+        db.record()
         # Failing tests still issue queries, so a failing workload is a warning.
-        _sh(args.workload, base_dir, pg.url("mc_capture"), check=False)
-        statements = pg.statements(exclude={"mc_template"})
+        workload_exit = _sh(args.workload, base_dir, db.url("mc_capture"), check=False)
+        statements = db.statements(exclude={"mc_template"})
         if not statements:
             fail("the workload ran no queries, so there is nothing to check")
 
         step(f"Applying {args.head} migrations")
-        pg.create_db("mc_old", template="mc_template")
-        pg.create_db("mc_new", template="mc_template")
-        _sh(args.migrate, head_dir, pg.url("mc_new"))
+        db.create_db("mc_old", template="mc_template")
+        db.create_db("mc_new", template="mc_template")
+        _sh(args.migrate, head_dir, db.url("mc_new"))
 
         step(f"Replaying {len(statements)} statements against both schemas")
-        old = pg.replay("mc_old", statements)
-        new = pg.replay("mc_new", statements)
+        old = db.replay("mc_old", statements)
+        new = db.replay("mc_new", statements)
     except Exception as e:  # Exit code 1 means a query breaks, so nothing else may use it.
         fail(f"{type(e).__name__}: {e}")
     finally:
-        pg.stop()
+        db.stop()
         for d in (base_dir, head_dir):
             if os.path.isdir(d):
                 _git(repo, "worktree", "remove", "--force", d)
         shutil.rmtree(workdir, ignore_errors=True)
 
-    sys.exit(report(args.base, args.head, statements, old, new))
+    code = report(db, args.base, args.head, statements, old, new)
+    if workload_exit:
+        print(f"\nNote: the workload exited with code {workload_exit}. If it stopped early, this result covers only the queries it ran.")
+    sys.exit(code)
 
 
-def report(base, head, statements, old, new):
+def report(db, base, head, statements, old, new):
     skipped = sum(1 for state, _ in old if state)
     broken = any(o is None and n is not None for (o, _), (n, _) in zip(old, new))
 
@@ -100,8 +110,8 @@ def report(base, head, statements, old, new):
         if old_state is not None or new_state is None:
             continue
         key = (new_state, new_msg)
-        follows_break = s.block in broken_blocks and new_state.startswith("23")
-        if key not in roots and (follows_break or (broken_blocks and new_state == "23503")):
+        follows_break = s.block in broken_blocks and db.is_integrity_error(new_state)
+        if key not in roots and (follows_break or (broken_blocks and db.is_foreign_key_error(new_state))):
             knock_on[key] += 1
             continue
         broken_blocks.add(s.block)
@@ -147,9 +157,11 @@ def _sh(cmd, cwd, url, check=True):
     )
     if proc.returncode != 0 and not check:
         print(f"migcheck: warning: command exited with {proc.returncode}: {cmd}", file=sys.stderr)
+        sys.stderr.write(proc.stderr[-2000:])
     elif proc.returncode != 0:
         sys.stderr.write(proc.stdout + proc.stderr)
         fail(f"command failed in {cwd}: {cmd}")
+    return proc.returncode
 
 
 if __name__ == "__main__":

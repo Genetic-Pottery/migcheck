@@ -28,7 +28,7 @@ FAIL: 4 statements from v1 break after v2-rename's migrations.
 v1 fails during a rolling deploy of v2-rename, and after a rollback to v1.
 ```
 
-migcheck supports Postgres. It's an early release.
+migcheck supports Postgres and MySQL. It's an early release.
 
 ## What it catches
 
@@ -52,7 +52,7 @@ the other 3 because the app's tests never queried the changed tables.
 ## Install
 
 migcheck needs Docker, git, and Python 3.10 or later. It has no Python
-dependencies and doesn't need a Postgres client on the host.
+dependencies and doesn't need a database client on the host.
 
 ```sh
 pipx install git+https://github.com/Genetic-Pottery/migcheck
@@ -71,12 +71,22 @@ migcheck --base <deployed-ref> --head <new-ref> \
 - `--base` is the release running in production, such as its tag.
 - `--head` is the release you're about to deploy.
 - `--migrate` and `--workload` are shell commands. migcheck runs them in a
-  checkout of each ref, with `DATABASE_URL` pointing at a throwaway Postgres
-  database.
+  checkout of each ref, with `DATABASE_URL` pointing at a throwaway database.
+- `--db` is the database your app uses: `postgres`, the default, or `mysql`.
 
 Your app must read its database connection from `DATABASE_URL` in the test
 environment. If it reads other variables, wrap the commands in a script that
 sets them.
+
+`DATABASE_URL` starts with `postgresql://` or `mysql://`. If your framework
+expects another scheme, such as `mysql2://` for Rails, rewrite it in the
+command:
+
+```sh
+migcheck --db mysql --base v5.2.0 --head main \
+  --migrate 'DATABASE_URL=mysql2${DATABASE_URL#mysql} bin/rails db:migrate' \
+  --workload 'DATABASE_URL=mysql2${DATABASE_URL#mysql} bin/rails test'
+```
 
 For example, for a Django app:
 
@@ -102,8 +112,9 @@ migcheck exits with one of the following codes:
 | `--head` | Ref of the release being deployed. Required. |
 | `--migrate` | Shell command that applies migrations to `$DATABASE_URL`. Required. |
 | `--workload` | Shell command that exercises the app against `$DATABASE_URL`, such as its test suite. Required. |
+| `--db` | Database the app uses: `postgres` or `mysql`. Default: `postgres` |
 | `--repo` | Git repository to check. Default: `.` |
-| `--image` | Postgres Docker image. Use the major version you run in production. Default: `postgres:17-alpine` |
+| `--image` | Database Docker image. Use the major version you run in production. Default: `postgres:17-alpine` or `mysql:8.4` |
 
 ## Try the demo
 
@@ -129,7 +140,7 @@ migcheck --repo /tmp/mc-demo --base v1 --head v2-rename \
 ## How it works
 
 1. migcheck checks out the base and head refs into temporary git worktrees.
-2. It starts a throwaway Postgres container with statement logging on.
+2. It starts a throwaway database container with statement logging on.
 3. It applies the base release's migrations, runs the base release's workload,
    and records every query the workload makes.
 4. It makes two copies of the base schema and applies the head release's
@@ -155,11 +166,13 @@ migcheck also accounts for how test runners use the database:
   runner rather than the app.
 - It replays `TRUNCATE` by emptying whichever listed tables exist, so cleanup
   between tests doesn't depend on the schema.
-- It records the primary key of each row the workload inserts and gives
-  replayed inserts the same keys, so later statements that reference those
-  rows find them.
+- On Postgres, it records the primary key of each row the workload inserts
+  and gives replayed inserts the same keys, so later statements that
+  reference those rows find them. On MySQL, replay starts from the same
+  auto-increment counters as the workload, so inserts get the same keys when
+  the workload runs one test at a time.
 
-Everything runs locally. The Postgres container listens only on `127.0.0.1`,
+Everything runs locally. The database container listens only on `127.0.0.1`,
 and migcheck removes the container and worktrees when it finishes.
 
 ## Limitations
@@ -172,7 +185,12 @@ and migcheck removes the container and worktrees when it finishes.
   don't show up.
 - migcheck checks for errors, not wrong results. A query that returns
   different rows on the new schema passes.
-- Replay ignores `SAVEPOINT` and `ROLLBACK TO SAVEPOINT`.
+- On Postgres, replay ignores `SAVEPOINT` and `ROLLBACK TO SAVEPOINT`.
+- On MySQL, a workload that runs tests in parallel can leave replayed rows
+  with different keys than the workload saw. Statements that reference those
+  keys then fail on both schemas, and migcheck skips them.
+- migcheck supports MySQL 8.0 and later. It doesn't support MariaDB, whose
+  query log has a different format.
 - Postgres words some errors differently for reads and writes, so one missing
   column can appear as two root causes.
 

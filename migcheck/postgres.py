@@ -11,7 +11,9 @@ import re
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+
+from .common import Statement
+from .common import run as _run
 
 DEFAULT_IMAGE = "postgres:17-alpine"
 
@@ -114,19 +116,10 @@ $f$;
 """
 
 
-@dataclass
-class Statement:
-    sql: str
-    # Statements from one workload transaction share a block. Replay rolls
-    # back a block's effects if the workload rolled back that transaction,
-    # the way a test runner discards each test's data.
-    block: int
-    keep: bool
-    # [table, id] for each row the statement inserted, in insert order.
-    ids: list
-
-
 class Postgres:
+    name = "Postgres"
+    default_image = DEFAULT_IMAGE
+
     def __init__(self, image=DEFAULT_IMAGE):
         self.image = image
         self.container = None
@@ -181,6 +174,18 @@ class Postgres:
         if template:
             sql += f' TEMPLATE "{template}"'
         self._psql("postgres", sql)
+
+    def record(self):
+        """Starts recording statements. Postgres logs every statement from
+        the start, so this does nothing."""
+
+    @staticmethod
+    def is_integrity_error(state):
+        return state.startswith("23")
+
+    @staticmethod
+    def is_foreign_key_error(state):
+        return state == "23503"
 
     def statements(self, exclude):
         """Returns the statements logged against any database not in `exclude`,
@@ -371,9 +376,3 @@ def _inline_params(sql, params):
         i += 1
     return "".join(out)
 
-
-def _run(cmd, stdin=None):
-    proc = subprocess.run(cmd, input=stdin, capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"{' '.join(cmd[:4])}... failed:\n{proc.stderr.strip()}")
-    return proc.stdout

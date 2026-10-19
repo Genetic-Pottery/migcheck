@@ -19,6 +19,9 @@ from .mysql import MySQL
 from .postgres import Postgres
 
 ADAPTERS = {"postgres": Postgres, "mysql": MySQL}
+# Marks migcheck's pull request comment, so a later run can update it.
+MARKER = "<!-- migcheck -->"
+MARKDOWN = None
 
 
 def main():
@@ -31,7 +34,10 @@ def main():
     parser.add_argument("--db", choices=ADAPTERS, default="postgres", help="database the app uses (default: postgres)")
     defaults = " or ".join(a.default_image for a in ADAPTERS.values())
     parser.add_argument("--image", help=f"database Docker image (default: {defaults})")
+    parser.add_argument("--markdown", metavar="PATH", help="also write the result as Markdown to PATH, for a pull request comment")
     args = parser.parse_args()
+    global MARKDOWN
+    MARKDOWN = args.markdown
 
     repo = os.path.abspath(args.repo)
     workdir = tempfile.mkdtemp(prefix="migcheck-")
@@ -76,33 +82,93 @@ def main():
                 _git(repo, "worktree", "remove", "--force", d)
         shutil.rmtree(workdir, ignore_errors=True)
 
-    code = report(db, args.base, args.head, statements, old, new)
-    if workload_exit:
-        print(f"\nNote: the workload exited with code {workload_exit}. If it stopped early, this result covers only the queries it ran.")
-    sys.exit(code)
+    sys.exit(report(db, args.base, args.head, statements, old, new, workload_exit))
 
 
-def report(db, base, head, statements, old, new):
+def report(db, base, head, statements, old, new, workload_exit):
+    """Prints the result, writes it as Markdown if requested, and returns the exit code."""
     skipped = sum(1 for state, _ in old if state)
-    broken = any(o is None and n is not None for (o, _), (n, _) in zip(old, new))
+    if skipped == len(statements):
+        fail(
+            f"all {skipped} statements fail on {base}'s own schema, so there is nothing to compare. "
+            f"First error: [{old[0][0]}] {old[0][1]}"
+        )
+    roots, knock_on = _classify(db, statements, old, new)
+    count = sum(len(v) for v in roots.values())
+    note = ""
+    if workload_exit:
+        note = f"The workload exited with code {workload_exit}. If it stopped early, this result covers only the queries it ran."
 
     print()
-    if skipped == len(statements):
-        print(f"ERROR: all {skipped} statements fail on {base}'s own schema, so there is nothing to compare.")
-        print(f"First error: [{old[0][0]}] {old[0][1]}")
-        return 2
     if skipped:
         print(f"Skipped {skipped} statements that also fail on {base}'s schema.")
-    if not broken:
+    if not roots:
         print(f"PASS: all {len(statements) - skipped} statements from {base} still work after {head}'s migrations.")
-        return 0
+    else:
+        print(f"FAIL: {count} statements from {base} break after {head}'s migrations.\n")
+        for (state, msg), stmts in roots.items():
+            print(f"  [{state}] {msg}")
+            print(f"      {len(stmts)} statements in {_blocks(stmts)} transactions. Examples:")
+            for sql in _examples(stmts, 160):
+                print(f"      {sql}")
+            print()
+        if knock_on:
+            print("  Later failures in the same transactions, likely caused by the errors above:")
+            for (state, msg), n in knock_on.items():
+                print(f"      [{state}] {msg} ({n})")
+            print()
+        print(f"{base} fails during a rolling deploy of {head}, and after a rollback to {base}.")
+    if note:
+        print(f"\nNote: {note}")
 
-    # The first break in a transaction is a root cause. A later integrity
-    # error in the same transaction usually follows from it, such as a foreign
-    # key to a row whose insert failed. A foreign key error after any earlier
-    # break is also a knock-on, because apps often commit each request
-    # separately, so the failed insert and the reference to it can sit in
-    # different transactions.
+    if MARKDOWN:
+        md = [MARKER]
+        if not roots:
+            md.append("### migcheck: PASS")
+            md.append("")
+            md.append(f"All {len(statements) - skipped:,} statements from `{base}` still work after `{head}`'s migrations.")
+        else:
+            md.append("### migcheck: FAIL")
+            md.append("")
+            md.append(
+                f"{count:,} statements from `{base}` break after `{head}`'s migrations. "
+                f"`{base}` fails during a rolling deploy of `{head}`, and after a rollback to `{base}`."
+            )
+            for (state, msg), stmts in roots.items():
+                md.append("")
+                md.append(f"**`{state}` {_md_escape(msg)}**")
+                md.append(f"{len(stmts):,} statements in {_blocks(stmts):,} transactions. Examples:")
+                md.append("")
+                md.append("```sql")
+                md.extend(_examples(stmts, 500))
+                md.append("```")
+            if knock_on:
+                md.append("")
+                md.append("<details><summary>Later failures in the same transactions, likely caused by the errors above</summary>")
+                md.append("")
+                for (state, msg), n in knock_on.items():
+                    md.append(f"- `{state}` {_md_escape(msg)} ({n:,})")
+                md.append("")
+                md.append("</details>")
+        if skipped:
+            md.append("")
+            md.append(f"Skipped {skipped:,} statements that also fail on `{base}`'s schema.")
+        if note:
+            md.append("")
+            md.append(f"> [!NOTE]\n> {note}")
+        _write_markdown(md)
+    return 1 if roots else 0
+
+
+def _classify(db, statements, old, new):
+    """Splits the statements that break into root causes and knock-on errors.
+
+    The first break in a transaction is a root cause. A later integrity error
+    in the same transaction usually follows from it, such as a foreign key to
+    a row whose insert failed. A foreign key error after any earlier break is
+    also a knock-on, because apps often commit each request separately, so the
+    failed insert and the reference to it can sit in different transactions.
+    """
     roots = defaultdict(list)
     knock_on = defaultdict(int)
     broken_blocks = set()
@@ -116,29 +182,32 @@ def report(db, base, head, statements, old, new):
             continue
         broken_blocks.add(s.block)
         roots[key].append(s)
+    return roots, knock_on
 
-    count = sum(len(v) for v in roots.values())
-    print(f"FAIL: {count} statements from {base} break after {head}'s migrations.\n")
-    for (state, msg), stmts in roots.items():
-        blocks = len({s.block for s in stmts})
-        print(f"  [{state}] {msg}")
-        print(f"      {len(stmts)} statements in {blocks} transactions. Examples:")
-        examples = dict.fromkeys(" ".join(s.sql.split())[:160] for s in stmts)
-        for sql in list(examples)[:3]:
-            print(f"      {sql}")
-        print()
-    if knock_on:
-        print("  Later failures in the same transactions, likely caused by the errors above:")
-        for (state, msg), n in knock_on.items():
-            print(f"      [{state}] {msg} ({n})")
-        print()
-    print(f"{base} fails during a rolling deploy of {head}, and after a rollback to {base}.")
-    return 1
+
+def _blocks(stmts):
+    return len({s.block for s in stmts})
+
+
+def _examples(stmts, width):
+    examples = dict.fromkeys(" ".join(s.sql.split())[:width] for s in stmts)
+    return list(examples)[:3]
+
+
+def _md_escape(text):
+    return text.replace("<", "&lt;").replace("*", "\\*").replace("_", "\\_").replace("`", "'")
+
+
+def _write_markdown(lines):
+    with open(MARKDOWN, "w") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def fail(msg):
     """Exits with code 2, which means migcheck couldn't compare."""
     print(f"migcheck: {msg}", file=sys.stderr)
+    if MARKDOWN:
+        _write_markdown([MARKER, "### migcheck: couldn't compare", "", "```", msg, "```"])
     sys.exit(2)
 
 

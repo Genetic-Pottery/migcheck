@@ -118,6 +118,19 @@ migcheck exits with one of the following codes:
 | `--head-name` | Name to show for `--head` in the result, such as `this pull request`. |
 | `--markdown` | Also write the result as Markdown to this path, for a pull request comment. |
 
+## See it in action
+
+The [migcheck-example](https://github.com/Genetic-Pottery/migcheck-example)
+repository runs the action on its pull requests. Each pull request adds a
+migration, and migcheck comments with the result:
+
+- [Rename a column](https://github.com/Genetic-Pottery/migcheck-example/pull/1)
+  fails, because the production release still uses the old name.
+- [Add a `NOT NULL` column and drop its default](https://github.com/Genetic-Pottery/migcheck-example/pull/2)
+  fails, because the production release's inserts don't set it.
+- [Add a nullable column](https://github.com/Genetic-Pottery/migcheck-example/pull/3)
+  passes.
+
 ## Run it in GitHub Actions
 
 The migcheck action runs the check on each pull request and posts the result

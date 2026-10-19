@@ -155,6 +155,9 @@ migcheck also accounts for how test runners use the database:
   runner rather than the app.
 - It replays `TRUNCATE` by emptying whichever listed tables exist, so cleanup
   between tests doesn't depend on the schema.
+- It records the primary key of each row the workload inserts and gives
+  replayed inserts the same keys, so later statements that reference those
+  rows find them.
 
 Everything runs locally. The Postgres container listens only on `127.0.0.1`,
 and migcheck removes the container and worktrees when it finishes.

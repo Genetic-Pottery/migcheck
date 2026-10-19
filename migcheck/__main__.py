@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections import defaultdict
 
 from .postgres import DEFAULT_IMAGE, Postgres
@@ -59,8 +60,8 @@ def main():
         step(f"Replaying {len(statements)} statements against both schemas")
         old = pg.replay("mc_old", statements)
         new = pg.replay("mc_new", statements)
-    except RuntimeError as e:
-        fail(str(e))
+    except Exception as e:  # Exit code 1 means a query breaks, so nothing else may use it.
+        fail(f"{type(e).__name__}: {e}")
     finally:
         pg.stop()
         for d in (base_dir, head_dir):
@@ -88,7 +89,10 @@ def report(base, head, statements, old, new):
 
     # The first break in a transaction is a root cause. A later integrity
     # error in the same transaction usually follows from it, such as a foreign
-    # key to a row whose insert failed.
+    # key to a row whose insert failed. A foreign key error after any earlier
+    # break is also a knock-on, because apps often commit each request
+    # separately, so the failed insert and the reference to it can sit in
+    # different transactions.
     roots = defaultdict(list)
     knock_on = defaultdict(int)
     broken_blocks = set()
@@ -96,7 +100,8 @@ def report(base, head, statements, old, new):
         if old_state is not None or new_state is None:
             continue
         key = (new_state, new_msg)
-        if s.block in broken_blocks and key not in roots and new_state.startswith("23"):
+        follows_break = s.block in broken_blocks and new_state.startswith("23")
+        if key not in roots and (follows_break or (broken_blocks and new_state == "23503")):
             knock_on[key] += 1
             continue
         broken_blocks.add(s.block)
@@ -128,7 +133,7 @@ def fail(msg):
 
 
 def step(msg):
-    print(f"==> {msg}", file=sys.stderr)
+    print(f"==> {time.strftime('%H:%M:%S')} {msg}", file=sys.stderr)
 
 
 def _git(repo, *args):

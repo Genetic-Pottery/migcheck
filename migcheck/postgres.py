@@ -6,6 +6,7 @@ talks to it with the psql inside the container, so the host needs only Docker.
 
 import csv
 import io
+import json
 import re
 import subprocess
 import time
@@ -13,6 +14,10 @@ import uuid
 from dataclasses import dataclass
 
 DEFAULT_IMAGE = "postgres:17-alpine"
+
+# Logged statements can be far larger than the csv module's 128 KiB default,
+# for example inserts that carry file contents.
+csv.field_size_limit(2**31 - 1)
 PASSWORD = "migcheck"
 LOG_FILE = "/tmp/pglog/pg.csv"
 
@@ -46,6 +51,67 @@ TRUNCATE = re.compile(
 )
 STATEMENT = re.compile(r"^(?:statement|execute [^:]+): (.*)$", re.DOTALL)
 PARAM = re.compile(r"\$(\d+) = ('(?:[^']|'')*'|NULL)")
+ROW_ID = "migcheck-id "
+
+# Many apps let the database generate primary keys, through a sequence or a
+# function such as Mastodon's timestamp_id(). Replay would generate different
+# keys than the workload got, and later statements that reference the
+# original keys would fail on both schemas. So every table the workload
+# creates logs the id of each row inserted, and replay pins inserts to those
+# ids. Installing this in template1 reaches databases the test runner creates.
+CAPTURE_IDS = """
+CREATE FUNCTION public._migcheck_log_id() RETURNS trigger AS $f$
+BEGIN
+  RAISE LOG 'migcheck-id %', json_build_array(TG_TABLE_NAME, to_jsonb(NEW) -> 'id');
+  RETURN NULL;
+END
+$f$ LANGUAGE plpgsql;
+
+CREATE FUNCTION public._migcheck_attach() RETURNS event_trigger AS $f$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT objid::regclass AS t FROM pg_event_trigger_ddl_commands()
+           WHERE command_tag = 'CREATE TABLE' AND object_type = 'table' LOOP
+    EXECUTE format('CREATE TRIGGER _migcheck_id AFTER INSERT ON %s FOR EACH ROW EXECUTE FUNCTION public._migcheck_log_id()', r.t);
+  END LOOP;
+END
+$f$ LANGUAGE plpgsql;
+
+CREATE EVENT TRIGGER _migcheck_attach ON ddl_command_end
+  WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION public._migcheck_attach();
+"""
+
+PIN_IDS = """
+CREATE FUNCTION _migcheck.pin_id() RETURNS trigger AS $f$
+DECLARE
+  ids jsonb := coalesce(nullif(current_setting('migcheck.ids', true), ''), '[]')::jsonb;
+  pos int := coalesce(nullif(current_setting('migcheck.pos', true), ''), '0')::int;
+  e jsonb;
+BEGIN
+  IF pos < jsonb_array_length(ids) THEN
+    e := ids -> pos;
+    IF e ->> 0 = TG_TABLE_NAME THEN
+      PERFORM set_config('migcheck.pos', (pos + 1)::text, true);
+      IF e -> 1 <> 'null'::jsonb THEN
+        NEW := jsonb_populate_record(NEW, jsonb_build_object('id', e -> 1));
+      END IF;
+    END IF;
+  END IF;
+  RETURN NEW;
+END
+$f$ LANGUAGE plpgsql;
+
+DO $f$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT c.oid::regclass AS t FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', 'information_schema', '_migcheck')
+             AND n.nspname NOT LIKE 'pg_toast%' LOOP
+    EXECUTE format('CREATE TRIGGER _migcheck_pin BEFORE INSERT ON %s FOR EACH ROW EXECUTE FUNCTION _migcheck.pin_id()', r.t);
+  END LOOP;
+END
+$f$;
+"""
 
 
 @dataclass
@@ -56,6 +122,8 @@ class Statement:
     # the way a test runner discards each test's data.
     block: int
     keep: bool
+    # [table, id] for each row the statement inserted, in insert order.
+    ids: list
 
 
 class Postgres:
@@ -77,6 +145,12 @@ class Postgres:
             "-c", "log_directory=/tmp/pglog",
             "-c", "log_filename=pg.log",
             "-c", "log_rotation_size=0",
+            # Postgres otherwise copies the whole statement into every log
+            # line raised during it, including one per inserted row from the
+            # id capture below. A large multi-row insert then fills the log
+            # with gigabytes of copies. migcheck reads statements from their
+            # own log lines, so it doesn't need the copies.
+            "-c", "log_min_error_statement=panic",
             "-c", "fsync=off",
         ])
         mapping = _run(["docker", "port", self.container, "5432/tcp"])
@@ -89,6 +163,7 @@ class Postgres:
                 capture_output=True,
             )
             if check.returncode == 0:
+                self._psql("template1", CAPTURE_IDS)
                 return
             time.sleep(0.5)
         raise RuntimeError("Postgres did not become ready in 30 seconds")
@@ -115,18 +190,27 @@ class Postgres:
         test_<name>, so this doesn't filter on a single name.
         """
         exclude = {"postgres", "template0", "template1", *exclude}
-        raw = _run(["docker", "exec", self.container, "cat", LOG_FILE])
-        rows = list(csv.reader(io.StringIO(raw)))
-        blocks = []  # [keep, [sql, ...]] in the order transactions started
+        # The log can be far larger than the statements kept from it, so read
+        # it as a stream instead of loading it whole.
+        proc = subprocess.Popen(["docker", "exec", self.container, "cat", LOG_FILE], stdout=subprocess.PIPE)
+        assert proc.stdout is not None
+        rows = csv.reader(io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="replace", newline=""))
+        blocks = []  # [keep, [[sql, ids], ...]] in the order transactions started
         open_blocks = {}  # session ID -> its open block
+        last = {}  # session ID -> its last replayed [sql, ids], or None
         for row in rows:
             if row[COL_DATABASE] in exclude or row[COL_SEVERITY] != "LOG":
+                continue
+            session = row[COL_SESSION]
+            if row[COL_MESSAGE].startswith(ROW_ID):
+                if last.get(session):
+                    last[session][1].append(json.loads(row[COL_MESSAGE][len(ROW_ID):]))
                 continue
             match = STATEMENT.match(row[COL_MESSAGE])
             if not match:
                 continue
             sql = match.group(1).strip()
-            session = row[COL_SESSION]
+            last[session] = None
             if TXN_BEGIN.match(sql):
                 open_blocks[session] = [True, []]
                 blocks.append(open_blocks[session])
@@ -141,17 +225,20 @@ class Postgres:
                 sql = _inline_params(sql, params)
             if truncate := TRUNCATE.match(sql):
                 sql = _lenient_truncate(truncate)
+            last[session] = [sql, []]
             if session in open_blocks:
-                open_blocks[session][1].append(sql)
+                open_blocks[session][1].append(last[session])
             else:
-                blocks.append([True, [sql]])  # autocommit
+                blocks.append([True, [last[session]]])  # autocommit
+        if proc.wait() != 0:
+            raise RuntimeError(f"reading the Postgres log failed with exit code {proc.returncode}")
         # A transaction still open when the workload exits never committed.
         for block in open_blocks.values():
             block[0] = False
         return [
-            Statement(sql, i, keep)
-            for i, (keep, sqls) in enumerate(b for b in blocks if b[1])
-            for sql in sqls
+            Statement(sql, i, keep, ids)
+            for i, (keep, stmts) in enumerate(b for b in blocks if b[1])
+            for sql, ids in stmts
         ]
 
     def replay(self, db, statements):
@@ -164,8 +251,9 @@ class Postgres:
         """
         tag = f"$mc_{uuid.uuid4().hex}$"
         lines = [
+            "ALTER EVENT TRIGGER _migcheck_attach DISABLE;",
             "CREATE SCHEMA _migcheck;",
-            "CREATE TABLE _migcheck.stmt (id int PRIMARY KEY, block int NOT NULL, keep bool NOT NULL, sql text NOT NULL);",
+            "CREATE TABLE _migcheck.stmt (id int PRIMARY KEY, block int NOT NULL, keep bool NOT NULL, row_ids text NOT NULL, sql text NOT NULL);",
             "CREATE TABLE _migcheck.result (id int PRIMARY KEY, sqlstate text, message text);",
             """
 CREATE FUNCTION _migcheck.truncate(names text[], restart bool) RETURNS void AS $f$
@@ -185,9 +273,11 @@ BEGIN
   END IF;
 END
 $f$ LANGUAGE plpgsql;""",
+            PIN_IDS,
         ]
         for i, s in enumerate(statements):
-            lines.append(f"INSERT INTO _migcheck.stmt VALUES ({i}, {s.block}, {s.keep}, {tag}{s.sql}{tag});")
+            ids = json.dumps(s.ids)
+            lines.append(f"INSERT INTO _migcheck.stmt VALUES ({i}, {s.block}, {s.keep}, {tag}{ids}{tag}, {tag}{s.sql}{tag});")
         # Results collect in variables because a rolled-back block also rolls
         # back any rows it wrote.
         lines.append("""
@@ -205,8 +295,10 @@ BEGIN
   SET CONSTRAINTS ALL IMMEDIATE;
   FOR b IN SELECT block, bool_and(keep) AS keep FROM _migcheck.stmt GROUP BY block ORDER BY block LOOP
     BEGIN
-      FOR s IN SELECT id, sql FROM _migcheck.stmt WHERE block = b.block ORDER BY id LOOP
+      FOR s IN SELECT id, row_ids, sql FROM _migcheck.stmt WHERE block = b.block ORDER BY id LOOP
         BEGIN
+          PERFORM set_config('migcheck.ids', s.row_ids, true);
+          PERFORM set_config('migcheck.pos', '0', true);
           EXECUTE s.sql;
           ids := array_append(ids, s.id);
           states := array_append(states, NULL::text);

@@ -19,13 +19,16 @@ the `issues` rename.
 
 ## Run it
 
-`requirements/` holds Plane's dependency files from `2a29ab8d4^`. They worked
-for every commit from `0098` through `0122`. For a commit with different
-dependencies, replace them with that commit's `apps/api/requirements/` and
-rebuild.
+The image installs Plane's test dependencies from commit `6c8779c8d`
+(`2a29ab8d4^`). Docker fetches that commit from GitHub, so you don't need a
+Plane checkout at that commit. The image worked for every migration from
+`0098` through `0122`. Plane moved to uv in a later commit, so this Dockerfile
+doesn't build from newer commits.
 
 ```sh
-docker build -t migcheck-plane-env examples/plane
+docker build -t migcheck-plane-env \
+  --build-context plane=https://github.com/makeplane/plane.git#6c8779c8d30dac97f2ff72617b27da9af1e3bc98:apps/api \
+  examples/plane
 docker run -d --rm --name migcheck-redis -p 127.0.0.1:6390:6379 redis:7-alpine
 
 python3 -m migcheck --repo ~/Projects/plane --base 2a29ab8d4^ --head 2a29ab8d4 \

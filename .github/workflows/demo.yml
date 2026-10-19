@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   demo:
@@ -40,7 +41,8 @@ jobs:
           head: ${{ matrix.head }}
           migrate: ${{ runner.temp }}/venv/bin/python migrate.py
           workload: ${{ runner.temp }}/venv/bin/python test_app.py
-          comment: "false"
+          comment: "true"
+          comment-key: ${{ matrix.head }}
       - name: Check the verdict
         env:
           RESULT: ${{ steps.migcheck.outputs.result }}

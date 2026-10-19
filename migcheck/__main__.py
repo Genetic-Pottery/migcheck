@@ -49,7 +49,7 @@ def main():
         _sh(args.workload, base_dir, pg.url("mc_capture"), check=False)
         statements = pg.statements(exclude={"mc_template"})
         if not statements:
-            sys.exit("migcheck: the workload ran no queries, so there is nothing to check")
+            fail("the workload ran no queries, so there is nothing to check")
 
         step(f"Applying {args.head} migrations")
         pg.create_db("mc_old", template="mc_template")
@@ -59,6 +59,8 @@ def main():
         step(f"Replaying {len(statements)} statements against both schemas")
         old = pg.replay("mc_old", statements)
         new = pg.replay("mc_new", statements)
+    except RuntimeError as e:
+        fail(str(e))
     finally:
         pg.stop()
         for d in (base_dir, head_dir):
@@ -119,6 +121,12 @@ def report(base, head, statements, old, new):
     return 1
 
 
+def fail(msg):
+    """Exits with code 2, which means migcheck couldn't compare."""
+    print(f"migcheck: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
 def step(msg):
     print(f"==> {msg}", file=sys.stderr)
 
@@ -136,7 +144,7 @@ def _sh(cmd, cwd, url, check=True):
         print(f"migcheck: warning: command exited with {proc.returncode}: {cmd}", file=sys.stderr)
     elif proc.returncode != 0:
         sys.stderr.write(proc.stdout + proc.stderr)
-        raise SystemExit(f"migcheck: command failed in {cwd}: {cmd}")
+        fail(f"command failed in {cwd}: {cmd}")
 
 
 if __name__ == "__main__":

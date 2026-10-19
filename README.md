@@ -3,96 +3,15 @@
 migcheck checks that a release's database migrations don't break the release
 running in production.
 
-During a rolling deploy, the previous release keeps serving traffic against the
-new schema. After a rollback, it runs against the new schema indefinitely.
-Linters such as squawk and strong_migrations check the migration SQL. migcheck
-checks the old release's queries against the new schema.
+During a rolling deploy, the old release keeps serving traffic after the new
+release's migrations run. After a rollback, it runs against the new schema
+indefinitely. A migration that passes review and passes the new release's tests
+can still take down the old release. Migration linters check the SQL. migcheck
+runs the old release's queries against the new schema and tells you which ones
+fail.
 
-Prototype. Postgres only.
-
-## How it works
-
-1. migcheck checks out the base and head refs into temporary git worktrees.
-2. It starts a throwaway Postgres container with statement logging on.
-3. It applies the base release's migrations, then runs the base release's
-   workload, for example its test suite, and records every query it makes.
-4. It makes two copies of the base schema and applies the head release's
-   migrations to one of them.
-5. It replays the recorded queries against both copies, in order, with
-   recorded bind parameters inlined.
-6. It reports each query that succeeds on the old schema and fails on the new
-   one, and exits with code `1`.
-
-Replaying against both copies filters out queries that fail for reasons
-unrelated to the migration, such as missing seed data.
-
-Replay follows the workload's transactions. If the workload rolled back a
-transaction, as test runners do after each test, replay rolls back its effects
-too. The report lists the first failure in each transaction as a root cause,
-and groups later integrity errors in that transaction separately.
-
-migcheck also accounts for test runners:
-
-- It records queries from every database the workload touches, because test
-  runners such as Django's create their own.
-- It drops DDL and transaction-control statements, which come from the test
-  runner rather than the app.
-- It replays `TRUNCATE` by emptying whichever listed tables exist, with
-  `CASCADE`, so cleanup between tests doesn't depend on the schema.
-
-## Results on a real app
-
-[Plane](https://github.com/makeplane/plane) is a Django and Postgres app.
-migcheck ran on 25 of its migrations, `0098` through `0122`, using Plane's
-test suite as the workload:
-
-| Result | Migrations |
-|---|---|
-| Real break, caught | `0104`, `0105`, `0113`, `0114`, `0116`, `0117` |
-| Correct pass | 15 migrations |
-| False alarm | None |
-| Real break, missed | `0098`, `0100`, `0118`. Plane's tests never touch the changed tables. |
-| Couldn't run | `0099`. Plane has two `0098` migrations at that commit. |
-
-Four of the six caught breaks come from one Django behavior. When a migration
-adds a column with a `default`, Django uses the default to fill existing rows
-and then drops it from the database. The column ends up `NOT NULL` with no
-database default, so the old release's inserts fail.
-
-For setup details, see [examples/plane](examples/plane/README.md).
-
-## Requirements
-
-- Docker
-- Python 3.10 or later
-
-migcheck runs `psql` inside the container, so the host doesn't need a
-Postgres client.
-
-## Run the demo
-
-The demo repo has one base release and three candidates:
-
-| Tag | Migration | Expected result |
-|---|---|---|
-| `v1` | Creates `users` with a `name` column | Base |
-| `v2-expand` | Adds `full_name` next to `name` | Pass |
-| `v2-rename` | Renames `name` to `full_name` | Fail |
-| `v2-notnull` | Adds `plan text NOT NULL` with no default | Fail |
-
-The demo app uses psycopg. To run it, do the following:
-
-```sh
-python3 -m venv /tmp/mc-venv
-/tmp/mc-venv/bin/pip install "psycopg[binary]"
-examples/make-demo.sh /tmp/mc-demo
-
-python3 -m migcheck --repo /tmp/mc-demo --base v1 --head v2-rename \
-  --migrate "/tmp/mc-venv/bin/python migrate.py" \
-  --workload "/tmp/mc-venv/bin/python test_app.py"
-```
-
-Output:
+For example, this is migcheck's output for the [demo](#try-the-demo), where
+release `v2-rename` renames a column that `v1` uses:
 
 ```
 FAIL: 4 statements from v1 break after v2-rename's migrations.
@@ -109,30 +28,151 @@ FAIL: 4 statements from v1 break after v2-rename's migrations.
 v1 fails during a rolling deploy of v2-rename, and after a rollback to v1.
 ```
 
-## Options
+migcheck supports Postgres. It's an early release.
+
+## What it catches
+
+migcheck catches any change that makes the old release's queries fail,
+including the following:
+
+- Renamed or dropped columns and tables.
+- New `NOT NULL` columns without a database default. The old release's inserts
+  don't set them.
+- New constraints that the old release's writes violate.
+- Changed column types that the old release's values don't fit.
+
+The `NOT NULL` case is easy to miss in Django. When a migration adds a field
+with a `default`, Django fills existing rows with it and then drops the default
+from the database. The migration looks safe, but the old release's inserts fail.
+
+In a test against 25 migrations from an open-source Django app's history,
+migcheck caught 6 of the 9 breaking migrations, with no false alarms. It missed
+the other 3 because the app's tests never queried the changed tables.
+
+## Install
+
+migcheck needs Docker, git, and Python 3.10 or later. It has no Python
+dependencies and doesn't need a Postgres client on the host.
+
+```sh
+pipx install git+https://github.com/Genetic-Pottery/migcheck
+```
+
+## Use it
+
+Run migcheck from your app's repository:
+
+```sh
+migcheck --base <deployed-ref> --head <new-ref> \
+  --migrate "<command that applies migrations>" \
+  --workload "<command that runs your test suite>"
+```
+
+- `--base` is the release running in production, such as its tag.
+- `--head` is the release you're about to deploy.
+- `--migrate` and `--workload` are shell commands. migcheck runs them in a
+  checkout of each ref, with `DATABASE_URL` pointing at a throwaway Postgres
+  database.
+
+Your app must read its database connection from `DATABASE_URL` in the test
+environment. If it reads other variables, wrap the commands in a script that
+sets them.
+
+For example, for a Django app:
+
+```sh
+migcheck --base v1.4.0 --head main \
+  --migrate "python manage.py migrate" \
+  --workload "pytest"
+```
+
+migcheck exits with one of the following codes:
+
+| Code | Meaning |
+|---|---|
+| `0` | Every query the old release made still works. |
+| `1` | At least one query breaks. |
+| `2` | migcheck couldn't compare, for example because every query failed on the old schema too. |
+
+### Options
 
 | Flag | Description |
 |---|---|
+| `--base` | Ref of the release running in production. Required. |
+| `--head` | Ref of the release being deployed. Required. |
+| `--migrate` | Shell command that applies migrations to `$DATABASE_URL`. Required. |
+| `--workload` | Shell command that exercises the app against `$DATABASE_URL`, such as its test suite. Required. |
 | `--repo` | Git repository to check. Default: `.` |
-| `--base` | Ref of the release running in production. |
-| `--head` | Ref of the release being deployed. |
-| `--migrate` | Shell command that applies migrations to `$DATABASE_URL`. migcheck runs it in each worktree. |
-| `--workload` | Shell command that exercises the app against `$DATABASE_URL`. migcheck runs it in the base worktree. |
-| `--image` | Postgres Docker image. Default: `postgres:17-alpine` |
+| `--image` | Postgres Docker image. Use the major version you run in production. Default: `postgres:17-alpine` |
+
+## Try the demo
+
+The demo builds a small repository with one base release and three candidate
+releases. Two of the candidates break the base release.
+
+```sh
+python3 -m venv /tmp/mc-venv
+/tmp/mc-venv/bin/pip install "psycopg[binary]"
+examples/make-demo.sh /tmp/mc-demo
+
+migcheck --repo /tmp/mc-demo --base v1 --head v2-rename \
+  --migrate "/tmp/mc-venv/bin/python migrate.py" \
+  --workload "/tmp/mc-venv/bin/python test_app.py"
+```
+
+| Tag | Migration | Result |
+|---|---|---|
+| `v2-expand` | Adds `full_name` next to `name` | `PASS` |
+| `v2-rename` | Renames `name` to `full_name` | `FAIL` |
+| `v2-notnull` | Adds `plan text NOT NULL` with no default | `FAIL` |
+
+## How it works
+
+1. migcheck checks out the base and head refs into temporary git worktrees.
+2. It starts a throwaway Postgres container with statement logging on.
+3. It applies the base release's migrations, runs the base release's workload,
+   and records every query the workload makes.
+4. It makes two copies of the base schema and applies the head release's
+   migrations to one of them.
+5. It replays the recorded queries against both copies, with bind parameters
+   inlined.
+6. It reports each query that succeeds on the old schema and fails on the new
+   one.
+
+Replaying against both copies filters out queries that fail for reasons
+unrelated to the migration, such as missing seed data.
+
+Replay follows the workload's transactions. If the workload rolled back a
+transaction, as test runners do after each test, replay rolls back its effects
+too. The report lists the first failure in each transaction as a root cause and
+groups later integrity errors in that transaction separately.
+
+migcheck also accounts for how test runners use the database:
+
+- It records queries from every database the workload touches, because test
+  runners such as Django's create their own.
+- It drops DDL and transaction-control statements, which come from the test
+  runner rather than the app.
+- It replays `TRUNCATE` by emptying whichever listed tables exist, so cleanup
+  between tests doesn't depend on the schema.
+
+Everything runs locally. The Postgres container listens only on `127.0.0.1`,
+and migcheck removes the container and worktrees when it finishes.
 
 ## Limitations
 
-- migcheck checks only the queries the workload makes. Coverage is as good as
-  the base release's test suite.
-- Replay runs one statement at a time. Failures that depend on concurrency,
-  such as lock timeouts during a long migration, don't show up.
-- Replay ignores `SAVEPOINT` and `ROLLBACK TO SAVEPOINT`, so effects that the
-  workload rolled back to a savepoint stay until the end of the transaction.
-- Postgres words some errors differently for reads and writes, so one missing
-  column can appear as two root causes.
-- migcheck applies migrations to an empty database. A migration that fails on
-  a large or dirty production table can pass here.
+- migcheck checks only the queries the workload makes. If your tests never
+  touch a table, migcheck can't see it break.
+- migcheck applies migrations to an empty database. A migration that fails or
+  locks for a long time on a large production table can pass here.
+- Replay runs one statement at a time. Failures that depend on concurrency
+  don't show up.
 - migcheck checks for errors, not wrong results. A query that returns
   different rows on the new schema passes.
-- Multi-statement query strings and `$N` text inside dollar-quoted strings
-  aren't handled.
+- Replay ignores `SAVEPOINT` and `ROLLBACK TO SAVEPOINT`.
+- Postgres words some errors differently for reads and writes, so one missing
+  column can appear as two root causes.
+
+## License
+
+Apache 2.0. See [LICENSE](LICENSE).

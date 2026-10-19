@@ -55,7 +55,7 @@ migcheck needs Docker, git, and Python 3.10 or later. It has no Python
 dependencies and doesn't need a database client on the host.
 
 ```sh
-pipx install git+https://github.com/Genetic-Pottery/migcheck
+pipx install git+https://github.com/Genetic-Pottery/migcheck@v0.1.0
 ```
 
 ## Use it
@@ -140,7 +140,7 @@ jobs:
         with:
           fetch-depth: 0
       # Install your app's dependencies here.
-      - uses: Genetic-Pottery/migcheck@main
+      - uses: Genetic-Pottery/migcheck@v0
         with:
           migrate: python manage.py migrate
           workload: pytest

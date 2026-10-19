@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.1 - 2026-10-20
+
+### Changed
+
+- On pull requests, the action's comment refers to "this pull request"
+  instead of `HEAD`.
+
+### Added
+
+- `--head-name` sets the name the result uses for `--head`.
+
 ## v0.1.0 - 2026-10-19
 
 The first release.

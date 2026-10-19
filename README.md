@@ -115,6 +115,7 @@ migcheck exits with one of the following codes:
 | `--db` | Database the app uses: `postgres` or `mysql`. Default: `postgres` |
 | `--repo` | Git repository to check. Default: `.` |
 | `--image` | Database Docker image. Use the major version you run in production. Default: `postgres:17-alpine` or `mysql:8.4` |
+| `--head-name` | Name to show for `--head` in the result, such as `this pull request`. |
 | `--markdown` | Also write the result as Markdown to this path, for a pull request comment. |
 
 ## Run it in GitHub Actions

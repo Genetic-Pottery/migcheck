@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--db", choices=ADAPTERS, default="postgres", help="database the app uses (default: postgres)")
     defaults = " or ".join(a.default_image for a in ADAPTERS.values())
     parser.add_argument("--image", help=f"database Docker image (default: {defaults})")
+    parser.add_argument("--head-name", help="name to show for --head in the result, such as \"this pull request\"")
     parser.add_argument("--markdown", metavar="PATH", help="also write the result as Markdown to PATH, for a pull request comment")
     args = parser.parse_args()
     global MARKDOWN
@@ -82,11 +83,13 @@ def main():
                 _git(repo, "worktree", "remove", "--force", d)
         shutil.rmtree(workdir, ignore_errors=True)
 
-    sys.exit(report(db, args.base, args.head, statements, old, new, workload_exit))
+    sys.exit(report(db, args.base, args.head, statements, old, new, workload_exit, args.head_name))
 
 
-def report(db, base, head, statements, old, new, workload_exit):
+def report(db, base, head, statements, old, new, workload_exit, head_name=None):
     """Prints the result, writes it as Markdown if requested, and returns the exit code."""
+    head_md = head_name or f"`{head}`"
+    head = head_name or head
     skipped = sum(1 for state, _ in old if state)
     if skipped == len(statements):
         fail(
@@ -126,13 +129,13 @@ def report(db, base, head, statements, old, new, workload_exit):
         if not roots:
             md.append("### migcheck: PASS")
             md.append("")
-            md.append(f"All {len(statements) - skipped:,} statements from `{base}` still work after `{head}`'s migrations.")
+            md.append(f"All {len(statements) - skipped:,} statements from `{base}` still work after {head_md}'s migrations.")
         else:
             md.append("### migcheck: FAIL")
             md.append("")
             md.append(
-                f"{count:,} statements from `{base}` break after `{head}`'s migrations. "
-                f"`{base}` fails during a rolling deploy of `{head}`, and after a rollback to `{base}`."
+                f"{count:,} statements from `{base}` break after {head_md}'s migrations. "
+                f"`{base}` fails during a rolling deploy of {head_md}, and after a rollback to `{base}`."
             )
             for (state, msg), stmts in roots.items():
                 md.append("")

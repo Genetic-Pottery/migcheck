@@ -74,6 +74,9 @@ runs:
         args=(--repo . --base "$base" --head "$INPUT_HEAD" --db "$INPUT_DB"
               --migrate "$INPUT_MIGRATE" --workload "$INPUT_WORKLOAD" --markdown "$report")
         [ -n "$INPUT_IMAGE" ] && args+=(--image "$INPUT_IMAGE")
+        if [ "$INPUT_HEAD" = HEAD ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+          args+=(--head-name "this pull request")
+        fi
         code=0
         PYTHONPATH="$GITHUB_ACTION_PATH" python3 -m migcheck "${args[@]}" || code=$?
         if [ -f "$report" ]; then

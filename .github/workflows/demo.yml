@@ -1,0 +1,50 @@
+# Runs the action against the demo repository and checks each verdict.
+name: demo
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - head: v2-expand
+            expect: pass
+          - head: v2-rename
+            expect: fail
+          - head: v2-notnull
+            expect: fail
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the demo repository
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q "psycopg[binary]"
+          git config --global user.name demo
+          git config --global user.email demo@example.com
+          examples/make-demo.sh "$RUNNER_TEMP/demo"
+      - id: migcheck
+        uses: ./
+        continue-on-error: true
+        with:
+          working-directory: ${{ runner.temp }}/demo
+          base: v1
+          head: ${{ matrix.head }}
+          migrate: ${{ runner.temp }}/venv/bin/python migrate.py
+          workload: ${{ runner.temp }}/venv/bin/python test_app.py
+          comment: "false"
+      - name: Check the verdict
+        env:
+          RESULT: ${{ steps.migcheck.outputs.result }}
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          echo "migcheck returned $RESULT for ${{ matrix.head }}; expected $EXPECT"
+          [ "$RESULT" = "$EXPECT" ]

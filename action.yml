@@ -1,0 +1,114 @@
+name: migcheck
+description: Checks that a release's database migrations don't break the release running in production.
+author: Genetic Pottery
+branding:
+  icon: database
+  color: blue
+
+inputs:
+  migrate:
+    description: Shell command that applies migrations to $DATABASE_URL.
+    required: true
+  workload:
+    description: Shell command that exercises the app against $DATABASE_URL, such as its test suite.
+    required: true
+  base:
+    description: >-
+      Ref of the release running in production. Default: the newest tag
+      reachable from the pull request's base branch, or from HEAD^ outside a
+      pull request.
+    default: ""
+  head:
+    description: Ref of the release being deployed.
+    default: HEAD
+  db:
+    description: "Database the app uses: postgres or mysql."
+    default: postgres
+  image:
+    description: Database Docker image. Use the major version you run in production.
+    default: ""
+  working-directory:
+    description: Directory of the git repository to check.
+    default: .
+  comment:
+    description: Whether to post the result as a pull request comment. Requires pull-requests write permission.
+    default: "true"
+  comment-key:
+    description: Distinguishes this check's comment when a workflow runs migcheck more than once.
+    default: default
+  github-token:
+    description: Token for posting the pull request comment.
+    default: ${{ github.token }}
+
+outputs:
+  result:
+    description: "pass, fail, or error."
+    value: ${{ steps.check.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_MIGRATE: ${{ inputs.migrate }}
+        INPUT_WORKLOAD: ${{ inputs.workload }}
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_HEAD: ${{ inputs.head }}
+        INPUT_DB: ${{ inputs.db }}
+        INPUT_IMAGE: ${{ inputs.image }}
+        COMMENT_KEY: ${{ inputs.comment-key }}
+      run: |
+        report="$RUNNER_TEMP/migcheck-$COMMENT_KEY.md"
+        base="$INPUT_BASE"
+        if [ -z "$base" ]; then
+          ref=HEAD^
+          [ -n "${GITHUB_BASE_REF:-}" ] && ref="origin/$GITHUB_BASE_REF"
+          if ! base=$(git describe --tags --abbrev=0 "$ref" 2>/dev/null); then
+            echo "::error::migcheck found no tag reachable from $ref. Set the base input, or check out with fetch-depth: 0 so tags are available."
+            echo "result=error" >> "$GITHUB_OUTPUT"
+            exit 2
+          fi
+        fi
+        args=(--repo . --base "$base" --head "$INPUT_HEAD" --db "$INPUT_DB"
+              --migrate "$INPUT_MIGRATE" --workload "$INPUT_WORKLOAD" --markdown "$report")
+        [ -n "$INPUT_IMAGE" ] && args+=(--image "$INPUT_IMAGE")
+        code=0
+        PYTHONPATH="$GITHUB_ACTION_PATH" python3 -m migcheck "${args[@]}" || code=$?
+        if [ -f "$report" ]; then
+          sed -i "1s/.*/<!-- migcheck:$COMMENT_KEY -->/" "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        case $code in
+          0) echo "result=pass" >> "$GITHUB_OUTPUT" ;;
+          1) echo "result=fail" >> "$GITHUB_OUTPUT" ;;
+          *) echo "result=error" >> "$GITHUB_OUTPUT" ;;
+        esac
+        echo "code=$code" >> "$GITHUB_OUTPUT"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+
+    - if: always() && inputs.comment == 'true' && github.event.pull_request.number && steps.check.outputs.report
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR: ${{ github.event.pull_request.number }}
+        REPORT: ${{ steps.check.outputs.report }}
+        COMMENT_KEY: ${{ inputs.comment-key }}
+      run: |
+        [ -f "$REPORT" ] || exit 0
+        marker="<!-- migcheck:$COMMENT_KEY -->"
+        # Updates the comment from an earlier run instead of adding another.
+        id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1) || id=""
+        body=$(jq -Rs '{body: .}' < "$REPORT")
+        if [ -n "$id" ]; then
+          echo "$body" | gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" --input - >/dev/null
+        else
+          echo "$body" | gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --input - >/dev/null
+        fi || echo "::warning::migcheck couldn't post the pull request comment. Grant pull-requests: write, or set comment: false."
+
+    - shell: bash
+      env:
+        CODE: ${{ steps.check.outputs.code }}
+      run: exit "${CODE:-2}"

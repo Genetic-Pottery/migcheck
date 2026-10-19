@@ -115,6 +115,64 @@ migcheck exits with one of the following codes:
 | `--db` | Database the app uses: `postgres` or `mysql`. Default: `postgres` |
 | `--repo` | Git repository to check. Default: `.` |
 | `--image` | Database Docker image. Use the major version you run in production. Default: `postgres:17-alpine` or `mysql:8.4` |
+| `--markdown` | Also write the result as Markdown to this path, for a pull request comment. |
+
+## Run it in GitHub Actions
+
+The migcheck action runs the check on each pull request and posts the result
+as a comment. It updates the same comment when the pull request changes.
+
+```yaml
+name: migcheck
+on:
+  pull_request:
+    paths: ["migrations/**"]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  migcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # Install your app's dependencies here.
+      - uses: Genetic-Pottery/migcheck@main
+        with:
+          migrate: python manage.py migrate
+          workload: pytest
+```
+
+The checkout step must use `fetch-depth: 0`, so that migcheck can read the
+base release and its tags.
+
+By default, the base release is the newest tag reachable from the pull
+request's base branch. If you tag releases differently, set `base` to the ref
+running in production.
+
+The action takes the following inputs:
+
+| Input | Description |
+|---|---|
+| `migrate` | Shell command that applies migrations to `$DATABASE_URL`. Required. |
+| `workload` | Shell command that exercises the app against `$DATABASE_URL`. Required. |
+| `base` | Ref of the release running in production. Default: the newest tag reachable from the base branch. |
+| `head` | Ref of the release being deployed. Default: `HEAD` |
+| `db` | `postgres` or `mysql`. Default: `postgres` |
+| `image` | Database Docker image. Default: `postgres:17-alpine` or `mysql:8.4` |
+| `working-directory` | Directory of the repository to check. Default: `.` |
+| `comment` | Whether to post a pull request comment. Default: `true` |
+| `comment-key` | Keeps comments separate when a workflow runs migcheck more than once. Default: `default` |
+
+The action fails the job when a query breaks or migcheck can't compare, and
+sets the `result` output to `pass`, `fail`, or `error`. It also writes the
+result to the job summary.
+
+Pull requests from forks get a read-only token, so the action can't comment
+on them. The result still appears in the job summary.
 
 ## Try the demo
 

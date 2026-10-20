@@ -1,3 +1,15 @@
+<p align="center">
+  <img src="assets/logo.png" alt="migcheck logo" width="280">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Genetic-Pottery/migcheck/actions/workflows/demo.yml"><img src="https://github.com/Genetic-Pottery/migcheck/actions/workflows/demo.yml/badge.svg?branch=main" alt="Demo"></a>
+  <a href="https://github.com/Genetic-Pottery/migcheck/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Genetic-Pottery/migcheck" alt="License"></a>
+  <a href="#run-it-in-github-actions"><img src="https://img.shields.io/badge/GitHub_Action-available-2088FF?logo=githubactions&logoColor=white" alt="GitHub Action"></a>
+  <a href="https://github.com/Genetic-Pottery/migcheck/releases/latest"><img src="https://img.shields.io/github/v/release/Genetic-Pottery/migcheck" alt="Release"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+</p>
+
 # migcheck
 
 migcheck checks that a release's database migrations don't break the release

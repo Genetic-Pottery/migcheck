@@ -10,8 +10,6 @@
   <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
 </p>
 
-# migcheck
-
 migcheck checks that a release's database migrations don't break the release
 running in production.
 

@@ -27,6 +27,11 @@ inputs:
   image:
     description: Database Docker image. Use the major version you run in production.
     default: ""
+  require-workload-success:
+    description: >-
+      Whether a failing workload command is an error. By default, migcheck
+      checks the queries the workload ran and adds a warning to a pass.
+    default: "false"
   working-directory:
     description: Directory of the git repository to check.
     default: .
@@ -58,6 +63,7 @@ runs:
         INPUT_HEAD: ${{ inputs.head }}
         INPUT_DB: ${{ inputs.db }}
         INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_REQUIRE_WORKLOAD_SUCCESS: ${{ inputs.require-workload-success }}
         COMMENT_KEY: ${{ inputs.comment-key }}
       run: |
         report="$RUNNER_TEMP/migcheck-$COMMENT_KEY.md"
@@ -74,6 +80,7 @@ runs:
         args=(--repo . --base "$base" --head "$INPUT_HEAD" --db "$INPUT_DB"
               --migrate "$INPUT_MIGRATE" --workload "$INPUT_WORKLOAD" --markdown "$report")
         [ -n "$INPUT_IMAGE" ] && args+=(--image "$INPUT_IMAGE")
+        [ "$INPUT_REQUIRE_WORKLOAD_SUCCESS" = true ] && args+=(--require-workload-success)
         if [ "$INPUT_HEAD" = HEAD ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
           args+=(--head-name "this pull request")
         fi
@@ -82,6 +89,9 @@ runs:
         if [ -f "$report" ]; then
           sed -i "1s/.*/<!-- migcheck:$COMMENT_KEY -->/" "$report"
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          if grep -q '^### migcheck: PASS with a warning' "$report"; then
+            echo "::warning::migcheck passed, but the workload command failed. If it stopped early, the queries it didn't run weren't checked."
+          fi
         fi
         case $code in
           0) echo "result=pass" >> "$GITHUB_OUTPUT" ;;

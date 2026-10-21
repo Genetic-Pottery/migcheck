@@ -81,6 +81,22 @@ class ReportTest(unittest.TestCase):
         self.assertIn("Skipped 1 statements that also fail on v1's schema.", out)
         self.assertIn("The workload exited with code 3.", out)
 
+    def test_pass_with_a_failed_workload_is_a_warning(self):
+        code, out = run_report([Statement("a", 0, True)], [OK], [OK], workload_exit=2)
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "PASS WITH WARNING: all 1 statements from v1 still work after v2's migrations, "
+            "but the workload exited with code 2.", out,
+        )
+        self.assertIn("Warning: The workload exited with code 2.", out)
+        self.assertIn("--require-workload-success", out)
+
+    def test_fail_with_a_failed_workload_is_still_a_fail(self):
+        code, out = run_report([Statement("a", 0, True)], [OK], [("42703", "x")], workload_exit=2)
+        self.assertEqual(code, 1)
+        self.assertIn("Note: The workload exited with code 2.", out)
+        self.assertNotIn("--require-workload-success", out)
+
     def test_exits_2_when_every_statement_fails_on_the_old_schema(self):
         with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as exit:
             run_report([Statement("a", 0, True)], [("42P01", "no table")], [("42P01", "no table")])
@@ -100,6 +116,15 @@ class ReportTest(unittest.TestCase):
         self.assertIn("**`42703` column &lt;a\\_b> missing**", md)
         self.assertIn("```sql\nSELECT a_b FROM t\n```", md)
         self.assertIn("- `23502` null value (1)", md)
+
+    def test_markdown_pass_with_a_failed_workload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli.MARKDOWN = os.path.join(tmp, "result.md")
+            run_report([Statement("a", 0, True)], [OK], [OK], workload_exit=2)
+            with open(cli.MARKDOWN) as f:
+                md = f.read()
+        self.assertTrue(md.startswith(cli.MARKER + "\n### migcheck: PASS with a warning\n"))
+        self.assertIn("> [!WARNING]\n> The workload exited with code 2.", md)
 
 
 class ExamplesTest(unittest.TestCase):

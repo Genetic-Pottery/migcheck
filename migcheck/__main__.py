@@ -36,6 +36,10 @@ def main():
     parser.add_argument("--image", help=f"database Docker image (default: {defaults})")
     parser.add_argument("--head-name", help="name to show for --head in the result, such as \"this pull request\"")
     parser.add_argument("--markdown", metavar="PATH", help="also write the result as Markdown to PATH, for a pull request comment")
+    parser.add_argument(
+        "--require-workload-success", action="store_true",
+        help="exit with code 2 if the workload command fails, instead of checking the queries it ran",
+    )
     args = parser.parse_args()
     global MARKDOWN
     MARKDOWN = args.markdown
@@ -62,6 +66,8 @@ def main():
         db.record()
         # Failing tests still issue queries, so a failing workload is a warning.
         workload_exit = _sh(args.workload, base_dir, db.url("mc_capture"), check=False)
+        if workload_exit and args.require_workload_success:
+            fail(f"the workload exited with code {workload_exit}, and --require-workload-success is set")
         statements = db.statements(exclude={"mc_template"})
         if not statements:
             fail("the workload ran no queries, so there is nothing to check")
@@ -98,15 +104,23 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
         )
     roots, knock_on = _classify(db, statements, old, new)
     count = sum(len(v) for v in roots.values())
+    checked = len(statements) - skipped
+    # A workload that stopped early can pass without having run the queries
+    # that break, so a pass then carries a warning in its verdict.
     note = ""
     if workload_exit:
-        note = f"The workload exited with code {workload_exit}. If it stopped early, this result covers only the queries it ran."
+        note = f"The workload exited with code {workload_exit}. If it stopped early, the queries it didn't run weren't checked."
+        if not roots:
+            note += " To treat a failing workload as an error, use --require-workload-success."
 
     print()
     if skipped:
         print(f"Skipped {skipped} statements that also fail on {base}'s schema.")
-    if not roots:
-        print(f"PASS: all {len(statements) - skipped} statements from {base} still work after {head}'s migrations.")
+    if not roots and workload_exit:
+        print(f"PASS WITH WARNING: all {checked} statements from {base} still work after {head}'s migrations, "
+              f"but the workload exited with code {workload_exit}.")
+    elif not roots:
+        print(f"PASS: all {checked} statements from {base} still work after {head}'s migrations.")
     else:
         print(f"FAIL: {count} statements from {base} break after {head}'s migrations.\n")
         for (state, msg), stmts in roots.items():
@@ -122,14 +136,14 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
             print()
         print(f"{base} fails during a rolling deploy of {head}, and after a rollback to {base}.")
     if note:
-        print(f"\nNote: {note}")
+        print(f"\n{'Warning' if not roots else 'Note'}: {note}")
 
     if MARKDOWN:
         md = [MARKER]
         if not roots:
-            md.append("### migcheck: PASS")
+            md.append("### migcheck: PASS with a warning" if workload_exit else "### migcheck: PASS")
             md.append("")
-            md.append(f"All {len(statements) - skipped:,} statements from `{base}` still work after {head_md}'s migrations.")
+            md.append(f"All {checked:,} statements from `{base}` still work after {head_md}'s migrations.")
         else:
             md.append("### migcheck: FAIL")
             md.append("")
@@ -158,7 +172,7 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
             md.append(f"Skipped {skipped:,} statements that also fail on `{base}`'s schema.")
         if note:
             md.append("")
-            md.append(f"> [!NOTE]\n> {note}")
+            md.append(f"> [!{'WARNING' if not roots else 'NOTE'}]\n> {note}")
         _write_markdown(md)
     return 1 if roots else 0
 

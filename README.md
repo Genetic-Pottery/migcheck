@@ -117,6 +117,12 @@ migcheck exits with one of the following codes:
 | `1` | At least one query breaks. |
 | `2` | migcheck couldn't compare, for example because every query failed on the old schema too. |
 
+A failing workload, such as a test suite with failing tests, still issues
+queries, so migcheck checks the queries it ran. If none of them break,
+migcheck reports a pass with a warning, because a workload that stopped early
+can skip the queries that break. To make a failing workload exit with code `2`
+instead, use `--require-workload-success`.
+
 ### Options
 
 | Flag | Description |
@@ -130,6 +136,7 @@ migcheck exits with one of the following codes:
 | `--image` | Database Docker image. Use the major version you run in production. Default: `postgres:17-alpine` or `mysql:8.4` |
 | `--head-name` | Name to show for `--head` in the result, such as `this pull request`. |
 | `--markdown` | Also write the result as Markdown to this path, for a pull request comment. |
+| `--require-workload-success` | Exit with code `2` if the workload command fails, instead of checking the queries it ran. |
 
 ## See it in action
 
@@ -190,6 +197,7 @@ The action takes the following inputs:
 | `head` | Ref of the release being deployed. Default: `HEAD` |
 | `db` | `postgres` or `mysql`. Default: `postgres` |
 | `image` | Database Docker image. Default: `postgres:17-alpine` or `mysql:8.4` |
+| `require-workload-success` | Whether a failing workload command is an error. Default: `false` |
 | `working-directory` | Directory of the repository to check. Default: `.` |
 | `comment` | Whether to post a pull request comment. Default: `true` |
 | `comment-key` | Keeps comments separate when a workflow runs migcheck more than once. Default: `default` |

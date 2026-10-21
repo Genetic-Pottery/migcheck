@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="assets/logo.png" alt="migcheck logo" width="280">
+  <img src="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo.png" alt="migcheck logo" width="280">
 </p>
 
 <p align="center">
   <a href="https://github.com/Genetic-Pottery/migcheck/actions/workflows/ci.yml"><img src="https://github.com/Genetic-Pottery/migcheck/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/Genetic-Pottery/migcheck/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Genetic-Pottery/migcheck" alt="License"></a>
-  <a href="#run-it-in-github-actions"><img src="https://img.shields.io/badge/GitHub_Action-available-2088FF?logo=githubactions&logoColor=white" alt="GitHub Action"></a>
+  <a href="https://github.com/Genetic-Pottery/migcheck#run-it-in-github-actions"><img src="https://img.shields.io/badge/GitHub_Action-available-2088FF?logo=githubactions&logoColor=white" alt="GitHub Action"></a>
   <a href="https://github.com/Genetic-Pottery/migcheck/releases/latest"><img src="https://img.shields.io/github/v/release/Genetic-Pottery/migcheck" alt="Release"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
 </p>
@@ -20,8 +20,9 @@ can still take down the old release. Migration linters check the SQL. migcheck
 runs the old release's queries against the new schema and tells you which ones
 fail.
 
-For example, this is migcheck's output for the [demo](#try-the-demo), where
-release `v2-rename` renames a column that `v1` uses:
+For example, this is migcheck's output for the
+[demo](https://github.com/Genetic-Pottery/migcheck#try-the-demo), where release
+`v2-rename` renames a column that `v1` uses:
 
 ```
 FAIL: 4 statements from v1 break after v2-rename's migrations.
@@ -65,7 +66,7 @@ migcheck needs Docker, git, and Python 3.10 or later. It has no Python
 dependencies and doesn't need a database client on the host.
 
 ```sh
-pipx install git+https://github.com/Genetic-Pottery/migcheck@v0.1.0
+pipx install git+https://github.com/Genetic-Pottery/migcheck@v0.1.1
 ```
 
 ## Use it
@@ -303,11 +304,14 @@ them again, for example after you change the workload in
    ```
 
 The release workflow checks that the tag matches `pyproject.toml` and that
-`CHANGELOG.md` has a section for it, then runs the tests. If they pass, it
-creates the GitHub release with that section as its notes, and moves the major
-version tag, such as `v0`, to the release. If a check fails, nothing is
+`CHANGELOG.md` has a section for it, then runs the tests and builds the
+package. If they pass, it publishes the package to PyPI, creates the GitHub
+release with that section as its notes, and moves the major version tag, such
+as `v0`, to the release. If a check fails before the PyPI upload, nothing is
 released. To retry, delete the tag, fix the problem, and push the tag again.
+PyPI never accepts the same version twice, so after the upload, a fix needs a
+new version.
 
 ## License
 
-Apache 2.0. See [LICENSE](LICENSE).
+Apache 2.0. See [LICENSE](https://github.com/Genetic-Pottery/migcheck/blob/main/LICENSE).

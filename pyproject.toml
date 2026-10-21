@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -11,12 +11,28 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 dependencies = []
+authors = [{ name = "Cole Michaels" }]
+keywords = ["database", "migrations", "schema", "postgres", "mysql", "deployment", "rollback", "ci"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: SQL",
+    "Topic :: Database",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
 
 [project.scripts]
 migcheck = "migcheck.__main__:main"
 
 [project.urls]
 Repository = "https://github.com/Genetic-Pottery/migcheck"
+Changelog = "https://github.com/Genetic-Pottery/migcheck/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Genetic-Pottery/migcheck/issues"
 
 [tool.setuptools]
 packages = ["migcheck"]

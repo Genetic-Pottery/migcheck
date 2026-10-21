@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `--require-workload-success`, and the action's `require-workload-success`
+  input, make a failing workload exit with code `2`.
+- The report lists the most common errors among the statements it skipped.
+
+### Changed
+
+- A pass from a failing workload is reported as a pass with a warning.
+- On MySQL, the container allows 1,000 connections instead of 151, so test
+  suites that restart the app between tests don't run out.
+
 ## v0.1.2 - 2026-10-21
 
 ### Added

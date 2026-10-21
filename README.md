@@ -68,6 +68,12 @@ MySQL. Across about a million statements, it caught the one breaking migration,
 which drops a column that v1.23.8 queries, on both databases, with no false
 alarms.
 
+In a test against Ghost, a Node app on MySQL, migcheck replayed Ghost's API
+tests for two upgrades, v6.69.0 to v6.70.0 and v6.71.0 to v6.72.0, each with
+one test worker and with four. Each run replayed 180,000 to 190,000
+statements. migcheck caught all three breaks in v6.70.0, two dropped tables and
+a dropped column, and passed v6.72.0, with no false alarms.
+
 ## Install
 
 migcheck needs Docker, git, and Python 3.10 or later. It has no Python
@@ -250,7 +256,9 @@ migcheck --repo /tmp/mc-demo --base v1 --head v2-rename \
    one.
 
 Replaying against both copies filters out queries that fail for reasons
-unrelated to the migration, such as missing seed data.
+unrelated to the migration, such as missing seed data. The report counts these
+skipped queries and lists their most common errors, so you can tell whether
+replay missed data that later queries needed.
 
 Replay follows the workload's transactions. If the workload rolled back a
 transaction, as test runners do after each test, replay rolls back its effects

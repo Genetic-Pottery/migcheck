@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo.png" alt="migcheck logo" width="280">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo.png">
+    <img src="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo-light.png" alt="migcheck logo" width="280">
+  </picture>
 </p>
 
 <p align="center">

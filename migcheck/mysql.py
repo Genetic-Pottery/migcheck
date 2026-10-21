@@ -140,72 +140,15 @@ class MySQL:
         test_<name>, so this doesn't filter on a single name.
         """
         _run(self._client("-e", "SET GLOBAL general_log = OFF"))
-        exclude = SYSTEM_DBS | set(exclude)
-        blocks = []  # [keep, [sql, ...]] in the order transactions started
-        sessions = {}  # connection ID -> _Session
-
-        def close(session, keep):
-            if session.block is not None:
-                session.block[0] = keep
-                session.block = None
-
-        def add(session, sql):
-            if session.db in exclude:
-                return
-            if session.block is None and not session.autocommit:
-                session.block = [True, []]
-                blocks.append(session.block)
-            if session.block is not None:
-                session.block[1].append(sql)
-            else:
-                blocks.append([True, [sql]])
-
-        for conn, command, arg in self._entries():
-            session = sessions.setdefault(conn, _Session())
-            if command == "Connect":
-                m = CONNECT_DB.search(arg)
-                session.db = m.group(1) if m else None
-            elif command == "Init DB":
-                session.db = arg.strip()
-            elif command == "Quit":
-                # A transaction still open at disconnect never committed.
-                close(sessions.pop(conn), False)
-            elif command in ("Query", "Execute"):
-                sql = arg.strip()
-                if m := AUTOCOMMIT.match(sql):
-                    session.autocommit = m.group(1).strip("'\"").upper() in ("1", "ON", "TRUE")
-                    if session.autocommit:
-                        close(session, True)
-                elif TXN_BEGIN.match(sql):
-                    close(session, True)
-                    session.block = [True, []]
-                    blocks.append(session.block)
-                elif TXN_COMMIT.match(sql):
-                    close(session, True)
-                elif TXN_ROLLBACK.match(sql):
-                    close(session, False)
-                elif m := USE.match(sql):
-                    session.db = m.group(1)
-                elif DDL.match(sql):
-                    close(session, True)
-                elif SESSION_ONLY.match(sql):
-                    pass
-                elif m := TRUNCATE.match(sql):
-                    # TRUNCATE commits any open transaction and can't be undone.
-                    close(session, True)
-                    autocommit, session.autocommit = session.autocommit, True
-                    add(session, _lenient_truncate(m.group(1)))
-                    session.autocommit = autocommit
-                else:
-                    add(session, sql)
-        # A transaction still open when the workload exits never committed.
-        for session in sessions.values():
-            close(session, False)
-        return [
-            Statement(sql, i, keep)
-            for i, (keep, sqls) in enumerate(b for b in blocks if b[1])
-            for sql in sqls
-        ]
+        # The log can be far larger than the statements kept from it, so read
+        # it as a stream instead of loading it whole.
+        assert self.container
+        proc = subprocess.Popen(["docker", "exec", self.container, "cat", LOG_FILE], stdout=subprocess.PIPE)
+        assert proc.stdout is not None
+        statements = parse_log(proc.stdout, exclude)
+        if proc.wait() != 0:
+            raise RuntimeError(f"reading the MySQL log failed with exit code {proc.returncode}")
+        return statements
 
     def replay(self, db, statements):
         """Runs each statement in order and returns a list of (error code, message).
@@ -215,76 +158,17 @@ class MySQL:
         rolls back a failing statement on its own, and replay continues. Both
         entries are None on success.
         """
-        parts = [REPLAY_SETUP]
-        line = 1 + REPLAY_SETUP.count("\n")
-        starts = []  # first script line of each statement
-        sizes = Counter(s.block for s in statements)
-        current = None
-        in_txn = False
-        end_txn = ""
-        for s in statements:
-            if s.block != current:
-                if in_txn:
-                    parts.append(end_txn)
-                    line += 1
-                current = s.block
-                # A block with one statement runs on its own, as the
-                # workload's autocommit statements did.
-                in_txn = sizes[s.block] > 1 or not s.keep
-                end_txn = "COMMIT;\n" if s.keep else "ROLLBACK;\n"
-                if in_txn:
-                    parts.append("START TRANSACTION;\n")
-                    line += 1
-            starts.append(line)
-            # The terminator goes on its own line so a trailing comment can't
-            # swallow it.
-            text = s.sql.rstrip().rstrip(";") + "\n;\n"
-            parts.append(text)
-            line += text.count("\n")
-        if in_txn:
-            parts.append(end_txn)
-
-        script = "".join(parts).encode("utf-8", "surrogateescape")
+        script, starts = build_script(statements)
         assert self.container
         proc = subprocess.run(
             ["docker", "exec", "-i", "-e", f"MYSQL_PWD={PASSWORD}", self.container, "sh", "-c",
              f"mysql -uroot --force --binary-mode --max-allowed-packet=1G --default-character-set=utf8mb4 {db} >/dev/null"],
             input=script, capture_output=True,
         )
-        results: list[tuple[str | None, str | None]] = [(None, None)] * len(statements)
-        for raw in proc.stderr.decode("utf-8", "replace").splitlines():
-            m = ERROR.match(raw)
-            if not m:
-                continue
-            at = int(m.group(2))
-            i = bisect.bisect_right(starts, at) - 1
-            if i < 0:
-                raise RuntimeError(f"replay setup failed: {raw}")
-            if results[i][0] is None:
-                results[i] = (m.group(1), m.group(3))
+        results = parse_errors(proc.stderr.decode("utf-8", "replace"), starts, len(statements))
         if proc.returncode not in (0, 1):
             raise RuntimeError(f"mysql exited with code {proc.returncode}:\n{proc.stderr.decode(errors='replace')[-2000:]}")
         return results
-
-    def _entries(self):
-        """Yields (connection ID, command, argument) for each general log
-        entry, reading the log as a stream."""
-        assert self.container
-        proc = subprocess.Popen(["docker", "exec", self.container, "cat", LOG_FILE], stdout=subprocess.PIPE)
-        assert proc.stdout is not None
-        entry = None
-        for raw in proc.stdout:
-            m = ENTRY.match(raw)
-            if m:
-                if entry:
-                    yield _decode(entry)
-                entry = [m.group(1), m.group(2), m.group(3)]
-            elif entry:
-                entry[2] += raw
-        if entry:
-            yield _decode(entry)
-        if proc.wait() != 0:
-            raise RuntimeError(f"reading the MySQL log failed with exit code {proc.returncode}")
 
     def _client(self, *args):
         assert self.container
@@ -296,6 +180,143 @@ class _Session:
         self.db = None
         self.autocommit = True
         self.block = None  # the open transaction's block, if any
+
+
+def parse_log(log, exclude):
+    """Returns the statements in a general query log, read from the binary
+    line stream `log`, that ran against any database not in `exclude`."""
+    exclude = SYSTEM_DBS | set(exclude)
+    blocks = []  # [keep, [sql, ...]] in the order transactions started
+    sessions = {}  # connection ID -> _Session
+
+    def close(session, keep):
+        if session.block is not None:
+            session.block[0] = keep
+            session.block = None
+
+    def add(session, sql):
+        if session.db in exclude:
+            return
+        if session.block is None and not session.autocommit:
+            session.block = [True, []]
+            blocks.append(session.block)
+        if session.block is not None:
+            session.block[1].append(sql)
+        else:
+            blocks.append([True, [sql]])
+
+    for conn, command, arg in _entries(log):
+        session = sessions.setdefault(conn, _Session())
+        if command == "Connect":
+            m = CONNECT_DB.search(arg)
+            session.db = m.group(1) if m else None
+        elif command == "Init DB":
+            session.db = arg.strip()
+        elif command == "Quit":
+            # A transaction still open at disconnect never committed.
+            close(sessions.pop(conn), False)
+        elif command in ("Query", "Execute"):
+            sql = arg.strip()
+            if m := AUTOCOMMIT.match(sql):
+                session.autocommit = m.group(1).strip("'\"").upper() in ("1", "ON", "TRUE")
+                if session.autocommit:
+                    close(session, True)
+            elif TXN_BEGIN.match(sql):
+                close(session, True)
+                session.block = [True, []]
+                blocks.append(session.block)
+            elif TXN_COMMIT.match(sql):
+                close(session, True)
+            elif TXN_ROLLBACK.match(sql):
+                close(session, False)
+            elif m := USE.match(sql):
+                session.db = m.group(1)
+            elif DDL.match(sql):
+                close(session, True)
+            elif SESSION_ONLY.match(sql):
+                pass
+            elif m := TRUNCATE.match(sql):
+                # TRUNCATE commits any open transaction and can't be undone.
+                close(session, True)
+                autocommit, session.autocommit = session.autocommit, True
+                add(session, _lenient_truncate(m.group(1)))
+                session.autocommit = autocommit
+            else:
+                add(session, sql)
+    # A transaction still open when the workload exits never committed.
+    for session in sessions.values():
+        close(session, False)
+    return [
+        Statement(sql, i, keep)
+        for i, (keep, sqls) in enumerate(b for b in blocks if b[1])
+        for sql in sqls
+    ]
+
+
+def build_script(statements):
+    """Returns the replay script for `statements` and the script line each
+    statement starts on."""
+    parts = [REPLAY_SETUP]
+    line = 1 + REPLAY_SETUP.count("\n")
+    starts = []  # first script line of each statement
+    sizes = Counter(s.block for s in statements)
+    current = None
+    in_txn = False
+    end_txn = ""
+    for s in statements:
+        if s.block != current:
+            if in_txn:
+                parts.append(end_txn)
+                line += 1
+            current = s.block
+            # A block with one statement runs on its own, as the
+            # workload's autocommit statements did.
+            in_txn = sizes[s.block] > 1 or not s.keep
+            end_txn = "COMMIT;\n" if s.keep else "ROLLBACK;\n"
+            if in_txn:
+                parts.append("START TRANSACTION;\n")
+                line += 1
+        starts.append(line)
+        # The terminator goes on its own line so a trailing comment can't
+        # swallow it.
+        text = s.sql.rstrip().rstrip(";") + "\n;\n"
+        parts.append(text)
+        line += text.count("\n")
+    if in_txn:
+        parts.append(end_txn)
+    return "".join(parts).encode("utf-8", "surrogateescape"), starts
+
+
+def parse_errors(stderr, starts, count):
+    """Maps the mysql client's errors back to statements and returns a list
+    of (error code, message), with both entries None on success."""
+    results: list[tuple[str | None, str | None]] = [(None, None)] * count
+    for raw in stderr.splitlines():
+        m = ERROR.match(raw)
+        if not m:
+            continue
+        at = int(m.group(2))
+        i = bisect.bisect_right(starts, at) - 1
+        if i < 0:
+            raise RuntimeError(f"replay setup failed: {raw}")
+        if results[i][0] is None:
+            results[i] = (m.group(1), m.group(3))
+    return results
+
+
+def _entries(log):
+    """Yields (connection ID, command, argument) for each general log entry."""
+    entry = None
+    for raw in log:
+        m = ENTRY.match(raw)
+        if m:
+            if entry:
+                yield _decode(entry)
+            entry = [m.group(1), m.group(2), m.group(3)]
+        elif entry:
+            entry[2] += raw
+    if entry:
+        yield _decode(entry)
 
 
 def _decode(entry):

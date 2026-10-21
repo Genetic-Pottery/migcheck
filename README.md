@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Genetic-Pottery/migcheck/actions/workflows/demo.yml"><img src="https://github.com/Genetic-Pottery/migcheck/actions/workflows/demo.yml/badge.svg?branch=main" alt="Demo"></a>
+  <a href="https://github.com/Genetic-Pottery/migcheck/actions/workflows/ci.yml"><img src="https://github.com/Genetic-Pottery/migcheck/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/Genetic-Pottery/migcheck/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Genetic-Pottery/migcheck" alt="License"></a>
   <a href="#run-it-in-github-actions"><img src="https://img.shields.io/badge/GitHub_Action-available-2088FF?logo=githubactions&logoColor=white" alt="GitHub Action"></a>
   <a href="https://github.com/Genetic-Pottery/migcheck/releases/latest"><img src="https://img.shields.io/github/v/release/Genetic-Pottery/migcheck" alt="Release"></a>
@@ -275,6 +275,21 @@ and migcheck removes the container and worktrees when it finishes.
   query log has a different format.
 - Postgres words some errors differently for reads and writes, so one missing
   column can appear as two root causes.
+
+## Run the tests
+
+To run the tests, run the following from the repository root:
+
+```sh
+python3 -m unittest
+```
+
+The replay tests start Postgres and MySQL containers, so they need Docker.
+Without Docker, they're skipped.
+
+The parser tests read logs that were recorded from real servers. To record
+them again, for example after you change the workload in
+`tests/capture_fixtures.py`, run `python3 -m tests.capture_fixtures`.
 
 ## License
 

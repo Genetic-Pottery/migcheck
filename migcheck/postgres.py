@@ -194,57 +194,14 @@ class Postgres:
         Test runners often create their own database, such as Django's
         test_<name>, so this doesn't filter on a single name.
         """
-        exclude = {"postgres", "template0", "template1", *exclude}
         # The log can be far larger than the statements kept from it, so read
         # it as a stream instead of loading it whole.
         proc = subprocess.Popen(["docker", "exec", self.container, "cat", LOG_FILE], stdout=subprocess.PIPE)
         assert proc.stdout is not None
-        rows = csv.reader(io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="replace", newline=""))
-        blocks = []  # [keep, [[sql, ids], ...]] in the order transactions started
-        open_blocks = {}  # session ID -> its open block
-        last = {}  # session ID -> its last replayed [sql, ids], or None
-        for row in rows:
-            if row[COL_DATABASE] in exclude or row[COL_SEVERITY] != "LOG":
-                continue
-            session = row[COL_SESSION]
-            if row[COL_MESSAGE].startswith(ROW_ID):
-                if last.get(session):
-                    last[session][1].append(json.loads(row[COL_MESSAGE][len(ROW_ID):]))
-                continue
-            match = STATEMENT.match(row[COL_MESSAGE])
-            if not match:
-                continue
-            sql = match.group(1).strip()
-            last[session] = None
-            if TXN_BEGIN.match(sql):
-                open_blocks[session] = [True, []]
-                blocks.append(open_blocks[session])
-            elif TXN_COMMIT.match(sql) or TXN_ROLLBACK.match(sql):
-                block = open_blocks.pop(session, None)
-                if block:
-                    block[0] = bool(TXN_COMMIT.match(sql))
-            if not sql or TXN_CONTROL.match(sql) or DDL.match(sql):
-                continue
-            if row[COL_DETAIL].lower().startswith("parameters: "):
-                params = {int(n): v for n, v in PARAM.findall(row[COL_DETAIL])}
-                sql = _inline_params(sql, params)
-            if truncate := TRUNCATE.match(sql):
-                sql = _lenient_truncate(truncate)
-            last[session] = [sql, []]
-            if session in open_blocks:
-                open_blocks[session][1].append(last[session])
-            else:
-                blocks.append([True, [last[session]]])  # autocommit
+        statements = parse_log(io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="replace", newline=""), exclude)
         if proc.wait() != 0:
             raise RuntimeError(f"reading the Postgres log failed with exit code {proc.returncode}")
-        # A transaction still open when the workload exits never committed.
-        for block in open_blocks.values():
-            block[0] = False
-        return [
-            Statement(sql, i, keep, ids)
-            for i, (keep, stmts) in enumerate(b for b in blocks if b[1])
-            for sql, ids in stmts
-        ]
+        return statements
 
     def replay(self, db, statements):
         """Runs each statement in order and returns a list of (sqlstate, message).
@@ -337,6 +294,56 @@ COPY (SELECT id, sqlstate, message FROM _migcheck.result ORDER BY id) TO STDOUT 
              "psql", "-U", "postgres", "-d", db, "-X", "-q", "-v", "ON_ERROR_STOP=1"],
             stdin=sql,
         )
+
+
+def parse_log(log, exclude):
+    """Returns the statements in a csvlog, read from the text stream `log`,
+    logged against any database not in `exclude`, with bind parameters
+    inlined."""
+    exclude = {"postgres", "template0", "template1", *exclude}
+    blocks = []  # [keep, [[sql, ids], ...]] in the order transactions started
+    open_blocks = {}  # session ID -> its open block
+    last = {}  # session ID -> its last replayed [sql, ids], or None
+    for row in csv.reader(log):
+        if row[COL_DATABASE] in exclude or row[COL_SEVERITY] != "LOG":
+            continue
+        session = row[COL_SESSION]
+        if row[COL_MESSAGE].startswith(ROW_ID):
+            if last.get(session):
+                last[session][1].append(json.loads(row[COL_MESSAGE][len(ROW_ID):]))
+            continue
+        match = STATEMENT.match(row[COL_MESSAGE])
+        if not match:
+            continue
+        sql = match.group(1).strip()
+        last[session] = None
+        if TXN_BEGIN.match(sql):
+            open_blocks[session] = [True, []]
+            blocks.append(open_blocks[session])
+        elif TXN_COMMIT.match(sql) or TXN_ROLLBACK.match(sql):
+            block = open_blocks.pop(session, None)
+            if block:
+                block[0] = bool(TXN_COMMIT.match(sql))
+        if not sql or TXN_CONTROL.match(sql) or DDL.match(sql):
+            continue
+        if row[COL_DETAIL].lower().startswith("parameters: "):
+            params = {int(n): v for n, v in PARAM.findall(row[COL_DETAIL])}
+            sql = _inline_params(sql, params)
+        if truncate := TRUNCATE.match(sql):
+            sql = _lenient_truncate(truncate)
+        last[session] = [sql, []]
+        if session in open_blocks:
+            open_blocks[session][1].append(last[session])
+        else:
+            blocks.append([True, [last[session]]])  # autocommit
+    # A transaction still open when the workload exits never committed.
+    for block in open_blocks.values():
+        block[0] = False
+    return [
+        Statement(sql, i, keep, ids)
+        for i, (keep, stmts) in enumerate(b for b in blocks if b[1])
+        for sql, ids in stmts
+    ]
 
 
 def _lenient_truncate(match):

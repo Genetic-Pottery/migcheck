@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.1.2 - 2026-10-21
+
+### Added
+
+- migcheck is on PyPI. To install it, run `pipx install migcheck`.
+
+### Fixed
+
+- On MySQL, replay no longer runs migcheck's own statement that turns off
+  the query log as part of the workload.
+
 ## v0.1.1 - 2026-10-20
 
 ### Changed

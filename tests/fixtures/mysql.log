@@ -1,69 +1,69 @@
 /usr/sbin/mysqld, Version: 8.4.11 (MySQL Community Server - GPL). started with:
 Tcp port: 3306  Unix socket: /var/run/mysqld/mysqld.sock
 Time                 Id Command    Argument
-2026-10-21T00:49:17.506209Z	   14 Quit	
-2026-10-21T00:49:17.544164Z	   15 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.544237Z	   15 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.552222Z	   15 Query	INSERT INTO users (name) VALUES ('ada')
-2026-10-21T00:49:17.552431Z	   15 Quit	
-2026-10-21T00:49:17.592056Z	   16 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.592138Z	   16 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.592200Z	   16 Query	START TRANSACTION
-2026-10-21T00:49:17.592229Z	   16 Query	INSERT INTO users (name)
+2026-10-21T01:45:31.681493Z	   14 Quit	
+2026-10-21T01:45:31.721779Z	   15 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:31.721865Z	   15 Query	select @@version_comment limit 1
+2026-10-21T01:45:31.730101Z	   15 Query	INSERT INTO users (name) VALUES ('ada')
+2026-10-21T01:45:31.730394Z	   15 Quit	
+2026-10-21T01:45:31.776834Z	   16 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:31.776930Z	   16 Query	select @@version_comment limit 1
+2026-10-21T01:45:31.776996Z	   16 Query	START TRANSACTION
+2026-10-21T01:45:31.777027Z	   16 Query	INSERT INTO users (name)
   VALUES ('grace')
-2026-10-21T00:49:17.592315Z	   16 Query	UPDATE users SET name = 'Grace' WHERE name = 'grace'
-2026-10-21T00:49:17.600620Z	   16 Query	COMMIT
-2026-10-21T00:49:17.600679Z	   16 Quit	
-2026-10-21T00:49:17.640102Z	   17 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.640175Z	   17 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.640234Z	   17 Query	BEGIN
-2026-10-21T00:49:17.640250Z	   17 Query	SAVEPOINT s1
-2026-10-21T00:49:17.640266Z	   17 Query	DELETE FROM users
-2026-10-21T00:49:17.640342Z	   17 Query	ROLLBACK TO SAVEPOINT s1
-2026-10-21T00:49:17.648514Z	   17 Query	ROLLBACK
-2026-10-21T00:49:17.648566Z	   17 Quit	
-2026-10-21T00:49:17.687865Z	   18 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.687940Z	   18 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.688010Z	   18 Query	SET autocommit = 0
-2026-10-21T00:49:17.688046Z	   18 Query	INSERT INTO users (name) VALUES ('alan')
-2026-10-21T00:49:17.688123Z	   18 Query	COMMIT
-2026-10-21T00:49:17.688145Z	   18 Query	INSERT INTO users (name) VALUES ('edsger')
-2026-10-21T00:49:17.696332Z	   18 Query	SET autocommit = 1
-2026-10-21T00:49:17.696388Z	   18 Quit	
-2026-10-21T00:49:17.733101Z	   19 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.733179Z	   19 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.733245Z	   19 Query	USE mc_template
-2026-10-21T00:49:17.741121Z	   19 Query	SELECT COUNT(*) FROM users
-2026-10-21T00:49:17.741248Z	   19 Quit	
-2026-10-21T00:49:17.780926Z	   20 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.780995Z	   20 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.788959Z	   20 Query	INSERT INTO blobs (data) VALUES (_binary 'ÿþ')
-2026-10-21T00:49:17.789198Z	   20 Quit	
-2026-10-21T00:49:17.830153Z	   21 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.830228Z	   21 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.830298Z	   21 Query	LOCK TABLES users WRITE
-2026-10-21T00:49:17.830437Z	   21 Query	SELECT 1 FROM users LIMIT 1
-2026-10-21T00:49:17.838856Z	   21 Query	UNLOCK TABLES
-2026-10-21T00:49:17.838928Z	   21 Quit	
-2026-10-21T00:49:17.883285Z	   22 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.883370Z	   22 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.883457Z	   22 Query	START TRANSACTION
-2026-10-21T00:49:17.883490Z	   22 Query	INSERT INTO users (name) VALUES ('barbara')
-2026-10-21T00:49:17.883579Z	   22 Query	ALTER TABLE users ADD COLUMN email varchar(50)
-2026-10-21T00:49:17.894127Z	   22 Query	INSERT INTO users (name) VALUES ('after')
-2026-10-21T00:49:17.894211Z	   22 Quit	
-2026-10-21T00:49:17.935818Z	   23 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.935880Z	   23 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.935933Z	   23 Query	START TRANSACTION
-2026-10-21T00:49:17.935957Z	   23 Query	INSERT INTO users (name) VALUES ('x')
-2026-10-21T00:49:17.936019Z	   23 Query	TRUNCATE TABLE `users`
-2026-10-21T00:49:17.952279Z	   23 Query	COMMIT
-2026-10-21T00:49:17.952330Z	   23 Quit	
-2026-10-21T00:49:17.994239Z	   24 Connect	root@localhost on mc_capture using Socket
-2026-10-21T00:49:17.994314Z	   24 Query	select @@version_comment limit 1
-2026-10-21T00:49:17.994373Z	   24 Query	START TRANSACTION
-2026-10-21T00:49:18.002326Z	   24 Query	INSERT INTO users (name) VALUES ('never')
-2026-10-21T00:49:18.002923Z	   24 Quit	
-2026-10-21T00:49:18.043122Z	   25 Connect	root@localhost on  using Socket
-2026-10-21T00:49:18.043180Z	   25 Query	select @@version_comment limit 1
-2026-10-21T00:49:18.043239Z	   25 Query	SET GLOBAL general_log = OFF
+2026-10-21T01:45:31.777124Z	   16 Query	UPDATE users SET name = 'Grace' WHERE name = 'grace'
+2026-10-21T01:45:31.785620Z	   16 Query	COMMIT
+2026-10-21T01:45:31.785775Z	   16 Quit	
+2026-10-21T01:45:31.830954Z	   17 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:31.831063Z	   17 Query	select @@version_comment limit 1
+2026-10-21T01:45:31.831160Z	   17 Query	BEGIN
+2026-10-21T01:45:31.831183Z	   17 Query	SAVEPOINT s1
+2026-10-21T01:45:31.831204Z	   17 Query	DELETE FROM users
+2026-10-21T01:45:31.831316Z	   17 Query	ROLLBACK TO SAVEPOINT s1
+2026-10-21T01:45:31.840337Z	   17 Query	ROLLBACK
+2026-10-21T01:45:31.840562Z	   17 Quit	
+2026-10-21T01:45:31.885928Z	   18 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:31.886033Z	   18 Query	select @@version_comment limit 1
+2026-10-21T01:45:31.886119Z	   18 Query	SET autocommit = 0
+2026-10-21T01:45:31.886156Z	   18 Query	INSERT INTO users (name) VALUES ('alan')
+2026-10-21T01:45:31.886253Z	   18 Query	COMMIT
+2026-10-21T01:45:31.886282Z	   18 Query	INSERT INTO users (name) VALUES ('edsger')
+2026-10-21T01:45:31.894616Z	   18 Query	SET autocommit = 1
+2026-10-21T01:45:31.894756Z	   18 Quit	
+2026-10-21T01:45:31.941887Z	   19 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:31.942014Z	   19 Query	select @@version_comment limit 1
+2026-10-21T01:45:31.942116Z	   19 Query	USE mc_template
+2026-10-21T01:45:31.950282Z	   19 Query	SELECT COUNT(*) FROM users
+2026-10-21T01:45:31.950586Z	   19 Quit	
+2026-10-21T01:45:31.995268Z	   20 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:31.995355Z	   20 Query	select @@version_comment limit 1
+2026-10-21T01:45:32.004039Z	   20 Query	INSERT INTO blobs (data) VALUES (_binary 'ÿþ')
+2026-10-21T01:45:32.004476Z	   20 Quit	
+2026-10-21T01:45:32.047098Z	   21 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:32.047184Z	   21 Query	select @@version_comment limit 1
+2026-10-21T01:45:32.047255Z	   21 Query	LOCK TABLES users WRITE
+2026-10-21T01:45:32.047392Z	   21 Query	SELECT 1 FROM users LIMIT 1
+2026-10-21T01:45:32.055785Z	   21 Query	UNLOCK TABLES
+2026-10-21T01:45:32.055877Z	   21 Quit	
+2026-10-21T01:45:32.099154Z	   22 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:32.099242Z	   22 Query	select @@version_comment limit 1
+2026-10-21T01:45:32.099304Z	   22 Query	START TRANSACTION
+2026-10-21T01:45:32.099333Z	   22 Query	INSERT INTO users (name) VALUES ('barbara')
+2026-10-21T01:45:32.099435Z	   22 Query	ALTER TABLE users ADD COLUMN email varchar(50)
+2026-10-21T01:45:32.111938Z	   22 Query	INSERT INTO users (name) VALUES ('after')
+2026-10-21T01:45:32.112088Z	   22 Quit	
+2026-10-21T01:45:32.155463Z	   23 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:32.155548Z	   23 Query	select @@version_comment limit 1
+2026-10-21T01:45:32.155614Z	   23 Query	START TRANSACTION
+2026-10-21T01:45:32.155642Z	   23 Query	INSERT INTO users (name) VALUES ('x')
+2026-10-21T01:45:32.155725Z	   23 Query	TRUNCATE TABLE `users`
+2026-10-21T01:45:32.172838Z	   23 Query	COMMIT
+2026-10-21T01:45:32.172927Z	   23 Quit	
+2026-10-21T01:45:32.217181Z	   24 Connect	root@localhost on mc_capture using Socket
+2026-10-21T01:45:32.217279Z	   24 Query	select @@version_comment limit 1
+2026-10-21T01:45:32.217358Z	   24 Query	START TRANSACTION
+2026-10-21T01:45:32.225813Z	   24 Query	INSERT INTO users (name) VALUES ('never')
+2026-10-21T01:45:32.226536Z	   24 Quit	
+2026-10-21T01:45:32.270545Z	   25 Connect	root@localhost on mysql using Socket
+2026-10-21T01:45:32.270644Z	   25 Query	select @@version_comment limit 1
+2026-10-21T01:45:32.270712Z	   25 Query	SET GLOBAL general_log = OFF

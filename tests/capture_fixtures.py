@@ -128,7 +128,7 @@ def capture_mysql():
         db.record()
         for sql in MYSQL_SESSIONS:
             mysql_stdin(db, "mc_capture", sql if isinstance(sql, bytes) else sql.encode(), check=False)
-        subprocess.run(db._client("-e", "SET GLOBAL general_log = OFF"), check=True)
+        db._stop_recording()
         _save(db.container, MYSQL_LOG, "mysql.log")
     finally:
         db.stop()

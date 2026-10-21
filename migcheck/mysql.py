@@ -139,7 +139,7 @@ class MySQL:
         Test runners often create their own database, such as Django's
         test_<name>, so this doesn't filter on a single name.
         """
-        _run(self._client("-e", "SET GLOBAL general_log = OFF"))
+        self._stop_recording()
         # The log can be far larger than the statements kept from it, so read
         # it as a stream instead of loading it whole.
         assert self.container
@@ -169,6 +169,12 @@ class MySQL:
         if proc.returncode not in (0, 1):
             raise RuntimeError(f"mysql exited with code {proc.returncode}:\n{proc.stderr.decode(errors='replace')[-2000:]}")
         return results
+
+    def _stop_recording(self):
+        # The log records this statement before it takes effect. Connecting
+        # to a system database keeps it out of the workload, because
+        # parse_log skips everything sent to those.
+        _run(self._client("-D", "mysql", "-e", "SET GLOBAL general_log = OFF"))
 
     def _client(self, *args):
         assert self.container

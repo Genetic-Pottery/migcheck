@@ -52,10 +52,12 @@ class ParseCapturedLogTest(unittest.TestCase):
             (True, ["CALL _migcheck_truncate('users')"]),
             # The session quit with this transaction open.
             (False, ["INSERT INTO users (name) VALUES ('never')"]),
-            # migcheck's own statement that turns the log off is recorded too.
-            # It succeeds on both schemas, so it can't change the result.
-            (True, ["SET GLOBAL general_log = OFF"]),
         ])
+
+    def test_skips_the_statement_that_stops_recording(self):
+        self.assertNotIn("SET GLOBAL general_log = OFF", [s.sql for s in self.statements])
+        # The client's query on connect, from the same connection, goes too.
+        self.assertEqual(self.statements[-1].sql, "INSERT INTO users (name) VALUES ('never')")
 
     def test_skips_excluded_database_after_use(self):
         self.assertNotIn("SELECT COUNT(*) FROM users", [s.sql for s in self.statements])

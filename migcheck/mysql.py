@@ -90,6 +90,9 @@ class MySQL:
             "--skip-name-resolve",
             "--innodb-flush-log-at-trx-commit=0",
             "--innodb-doublewrite=OFF",
+            # Test suites that restart the app between tests can hold more
+            # connections than the default limit of 151.
+            "--max-connections=1000",
         ])
         mapping = _run(["docker", "port", self.container, "3306/tcp"])
         self.port = int(mapping.splitlines()[0].rsplit(":", 1)[1])

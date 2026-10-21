@@ -7,6 +7,7 @@
   <a href="https://github.com/Genetic-Pottery/migcheck/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Genetic-Pottery/migcheck" alt="License"></a>
   <a href="https://github.com/Genetic-Pottery/migcheck#run-it-in-github-actions"><img src="https://img.shields.io/badge/GitHub_Action-available-2088FF?logo=githubactions&logoColor=white" alt="GitHub Action"></a>
   <a href="https://github.com/Genetic-Pottery/migcheck/releases/latest"><img src="https://img.shields.io/github/v/release/Genetic-Pottery/migcheck" alt="Release"></a>
+  <a href="https://pypi.org/project/migcheck/"><img src="https://img.shields.io/pypi/v/migcheck" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
 </p>
 
@@ -66,7 +67,7 @@ migcheck needs Docker, git, and Python 3.10 or later. It has no Python
 dependencies and doesn't need a database client on the host.
 
 ```sh
-pipx install git+https://github.com/Genetic-Pottery/migcheck@v0.1.1
+pipx install migcheck
 ```
 
 ## Use it

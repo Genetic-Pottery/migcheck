@@ -62,6 +62,12 @@ In a test against 25 migrations from an open-source Django app's history,
 migcheck caught 6 of the 9 breaking migrations, with no false alarms. It missed
 the other 3 because the app's tests never queried the changed tables.
 
+In a test against Gitea, a Go app, migcheck replayed the API tests of two
+upgrades, v1.23.8 to v1.24.7 and v1.24.7 to v1.25.5, on both Postgres and
+MySQL. Across about a million statements, it caught the one breaking migration,
+which drops a column that v1.23.8 queries, on both databases, with no false
+alarms.
+
 ## Install
 
 migcheck needs Docker, git, and Python 3.10 or later. It has no Python

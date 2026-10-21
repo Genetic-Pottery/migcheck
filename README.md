@@ -1,8 +1,6 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo.png">
-    <img src="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo-light.png" alt="migcheck logo" width="280">
-  </picture>
+  <img src="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo-light.png#gh-light-mode-only" alt="migcheck logo" width="280">
+  <img src="https://raw.githubusercontent.com/Genetic-Pottery/migcheck/main/assets/logo.png#gh-dark-mode-only" alt="migcheck logo" width="280">
 </p>
 
 <p align="center">

@@ -291,6 +291,23 @@ The parser tests read logs that were recorded from real servers. To record
 them again, for example after you change the workload in
 `tests/capture_fixtures.py`, run `python3 -m tests.capture_fixtures`.
 
+## Release a version
+
+1. Set `version` in `pyproject.toml` to the new version, such as `0.2.0`.
+1. Add a `## v0.2.0 - YYYY-MM-DD` section to `CHANGELOG.md`.
+1. Commit, then tag and push:
+
+   ```sh
+   git tag -a v0.2.0 -m v0.2.0
+   git push origin main v0.2.0
+   ```
+
+The release workflow checks that the tag matches `pyproject.toml` and that
+`CHANGELOG.md` has a section for it, then runs the tests. If they pass, it
+creates the GitHub release with that section as its notes, and moves the major
+version tag, such as `v0`, to the release. If a check fails, nothing is
+released. To retry, delete the tag, fix the problem, and push the tag again.
+
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).

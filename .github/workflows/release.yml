@@ -1,0 +1,49 @@
+# Publishes a release when a version tag is pushed.
+#
+# The tag must match the version in pyproject.toml, and CHANGELOG.md must
+# have a section for it. Otherwise nothing is released, and the tag can be
+# deleted and pushed again after the fix.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Check that the tag matches the package version
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error file=pyproject.toml::The tag is $GITHUB_REF_NAME, but pyproject.toml says version $version."
+            exit 1
+          fi
+      - name: Read the release notes from the changelog
+        run: |
+          awk -v tag="$GITHUB_REF_NAME" '/^## /{ if (found) exit; found = ($2 == tag); next } found' CHANGELOG.md \
+            | sed '/./,$!d' > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "::error file=CHANGELOG.md::CHANGELOG.md has no section for $GITHUB_REF_NAME."
+            exit 1
+          fi
+      - name: Run the tests
+        run: python -m unittest
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
+      # Action users pin the major version, such as v0.
+      - name: Move the major version tag
+        run: |
+          major=${GITHUB_REF_NAME%%.*}
+          git tag -f "$major"
+          git push -f origin "refs/tags/$major"

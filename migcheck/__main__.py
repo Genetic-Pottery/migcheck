@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from .mysql import MySQL
 from .postgres import Postgres
@@ -115,7 +115,10 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
 
     print()
     if skipped:
-        print(f"Skipped {skipped} statements that also fail on {base}'s schema.")
+        print(f"Skipped {skipped} statements that also fail on {base}'s schema. Most common errors:")
+        for state, msg, n in _skip_reasons(old):
+            print(f"    [{state}] {msg[:160]} ({n})")
+        print()
     if not roots and workload_exit:
         print(f"PASS WITH WARNING: all {checked} statements from {base} still work after {head}'s migrations, "
               f"but the workload exited with code {workload_exit}.")
@@ -169,7 +172,14 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
                 md.append("</details>")
         if skipped:
             md.append("")
-            md.append(f"Skipped {skipped:,} statements that also fail on `{base}`'s schema.")
+            md.append(f"<details><summary>Skipped {skipped:,} statements that also fail on <code>{base}</code>'s schema</summary>")
+            md.append("")
+            md.append("Most common errors:")
+            md.append("")
+            for state, msg, n in _skip_reasons(old):
+                md.append(f"- `{state}` {_md_escape(msg[:500])} ({n:,})")
+            md.append("")
+            md.append("</details>")
         if note:
             md.append("")
             md.append(f"> [!{'WARNING' if not roots else 'NOTE'}]\n> {note}")
@@ -200,6 +210,17 @@ def _classify(db, statements, old, new):
         broken_blocks.add(s.block)
         roots[key].append(s)
     return roots, knock_on
+
+
+def _skip_reasons(old, limit=5):
+    """Returns the most common errors on the old schema as (state, example
+    message, count), grouped by state, because messages often quote values."""
+    counts = Counter(state for state, _ in old if state)
+    examples = {}
+    for state, msg in old:
+        if state:
+            examples.setdefault(state, msg)
+    return [(state, examples[state], n) for state, n in counts.most_common(limit)]
 
 
 def _blocks(stmts):

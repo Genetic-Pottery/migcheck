@@ -81,6 +81,13 @@ class ReportTest(unittest.TestCase):
         self.assertIn("Skipped 1 statements that also fail on v1's schema.", out)
         self.assertIn("The workload exited with code 3.", out)
 
+    def test_lists_the_most_common_skip_reasons(self):
+        statements = [Statement(str(i), i, True) for i in range(4)]
+        old = [("23505", "duplicate key 1"), ("42P01", "no table"), ("23505", "duplicate key 2"), OK]
+        code, out = run_report(statements, old, old)
+        self.assertEqual(code, 0)
+        self.assertIn("    [23505] duplicate key 1 (2)\n    [42P01] no table (1)\n", out)
+
     def test_pass_with_a_failed_workload_is_a_warning(self):
         code, out = run_report([Statement("a", 0, True)], [OK], [OK], workload_exit=2)
         self.assertEqual(code, 0)
@@ -116,6 +123,16 @@ class ReportTest(unittest.TestCase):
         self.assertIn("**`42703` column &lt;a\\_b> missing**", md)
         self.assertIn("```sql\nSELECT a_b FROM t\n```", md)
         self.assertIn("- `23502` null value (1)", md)
+
+    def test_markdown_lists_skip_reasons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli.MARKDOWN = os.path.join(tmp, "result.md")
+            statements = [Statement("a", 0, True), Statement("b", 1, True)]
+            run_report(statements, [("42P01", "no <t>"), OK], [("42P01", "no <t>"), OK])
+            with open(cli.MARKDOWN) as f:
+                md = f.read()
+        self.assertIn("<summary>Skipped 1 statements that also fail on <code>v1</code>'s schema</summary>", md)
+        self.assertIn("- `42P01` no &lt;t> (1)", md)
 
     def test_markdown_pass_with_a_failed_workload(self):
         with tempfile.TemporaryDirectory() as tmp:

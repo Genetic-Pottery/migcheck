@@ -180,8 +180,17 @@ Tested with Keycloak on Postgres and MySQL.
 
 ## Check your setup
 
-A wrong setup often still produces a result. Check the following before
-trusting one:
+A wrong setup often still produces a result. migcheck catches some setup
+problems itself:
+
+- If the migrate command creates no tables in the database at
+  `DATABASE_URL`, migcheck exits with code `2`.
+- If the head release's migrations don't change the schema, the result
+  includes a note. That's expected for a release without migrations.
+- If 10% or more of the statements fail on the base schema too, the result
+  includes a warning, because migcheck didn't check those statements.
+
+Check the following yourself before trusting a result:
 
 - **The statement count.** If migcheck replays far fewer statements than
   your test suite makes, the workload probably stopped early or ran against

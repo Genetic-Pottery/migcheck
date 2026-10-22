@@ -263,7 +263,13 @@ migcheck --repo /tmp/mc-demo --base v1 --head v2-rename \
 Replaying against both copies filters out queries that fail for reasons
 unrelated to the migration, such as missing seed data. The report counts these
 skipped queries and lists their most common errors, so you can tell whether
-replay missed data that later queries needed.
+replay missed data that later queries needed. If 10% or more of the queries
+are skipped, the report includes a warning.
+
+migcheck also checks for two signs of a wrong setup. If the base release's
+migrate command creates no tables in the database at `DATABASE_URL`, migcheck
+exits with code `2`. If the head release's migrations don't change the schema,
+the report includes a note.
 
 Replay follows the workload's transactions. If the workload rolled back a
 transaction, as test runners do after each test, replay rolls back its effects

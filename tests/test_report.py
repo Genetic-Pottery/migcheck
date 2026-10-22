@@ -11,11 +11,11 @@ from migcheck.postgres import Postgres
 OK = (None, None)
 
 
-def run_report(statements, old, new, workload_exit=0, head_name=None):
+def run_report(statements, old, new, workload_exit=0, head_name=None, schema_changed=True):
     """Runs report() and returns (exit code, stdout)."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        code = cli.report(Postgres, "v1", "v2", statements, old, new, workload_exit, head_name)
+        code = cli.report(Postgres, "v1", "v2", statements, old, new, workload_exit, head_name, schema_changed)
     return code, out.getvalue()
 
 
@@ -103,6 +103,33 @@ class ReportTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Note: The workload exited with code 2.", out)
         self.assertNotIn("--require-workload-success", out)
+
+    def test_warns_when_many_statements_are_skipped(self):
+        statements = [Statement(str(i), i, True) for i in range(4)]
+        old = [("42P01", "no table"), OK, OK, OK]
+        code, out = run_report(statements, old, old)
+        self.assertEqual(code, 0)
+        self.assertIn("Warning: 1 of 4 statements (25%) fail on v1's own schema too", out)
+
+    def test_no_skip_warning_for_a_few_skips(self):
+        statements = [Statement(str(i), i, True) for i in range(20)]
+        old = [("42P01", "no table")] + [OK] * 19
+        code, out = run_report(statements, old, old)
+        self.assertNotIn("Warning", out)
+
+    def test_notes_an_unchanged_schema(self):
+        code, out = run_report([Statement("a", 0, True)], [OK], [OK], schema_changed=False)
+        self.assertEqual(code, 0)
+        self.assertIn("PASS: all 1 statements", out)
+        self.assertIn("Note: v2's migrations didn't change the schema.", out)
+
+    def test_markdown_notes_an_unchanged_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli.MARKDOWN = os.path.join(tmp, "result.md")
+            run_report([Statement("a", 0, True)], [OK], [OK], schema_changed=False)
+            with open(cli.MARKDOWN) as f:
+                md = f.read()
+        self.assertIn("> [!NOTE]\n> `v2`'s migrations didn't change the schema.", md)
 
     def test_exits_2_when_every_statement_fails_on_the_old_schema(self):
         with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit) as exit:

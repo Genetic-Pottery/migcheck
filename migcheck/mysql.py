@@ -122,6 +122,19 @@ class MySQL:
                   "set -o pipefail; mysqldump -uroot --single-transaction --routines --triggers --events "
                   f"--hex-blob --no-tablespaces --set-gtid-purged=OFF {template} | mysql -uroot {name}"])
 
+    def has_tables(self, db):
+        out = _run(self._client("-N", "-e", f"SELECT count(*) FROM information_schema.tables WHERE table_schema = '{db}'"))
+        return int(out) > 0
+
+    def schema(self, db):
+        """Returns the database's schema as text, for comparing two databases."""
+        assert self.container
+        dump = _run(["docker", "exec", "-e", f"MYSQL_PWD={PASSWORD}", self.container, "mysqldump", "-uroot",
+                     "--no-data", "--skip-comments", "--routines", "--triggers", "--events",
+                     "--no-tablespaces", "--set-gtid-purged=OFF", db])
+        # Inserted rows move the auto-increment counter, which isn't schema.
+        return re.sub(r" AUTO_INCREMENT=\d+", "", dump)
+
     def record(self):
         """Starts recording statements. The log stays off until the workload
         runs, so setup statements don't appear in it."""

@@ -7,6 +7,12 @@
 - `--require-workload-success`, and the action's `require-workload-success`
   input, make a failing workload exit with code `2`.
 - The report lists the most common errors among the statements it skipped.
+- migcheck exits with code `2` if the migrate command creates no tables in the
+  database at `DATABASE_URL`, because both schemas would then be empty and
+  every query would pass.
+- The report notes when the head release's migrations don't change the
+  schema, and warns when 10% or more of the statements fail on the base
+  schema too.
 - `RECIPES.md` shows how to set up migcheck for Django, Rails, SQLAlchemy, Go,
   Knex, and apps that migrate on startup.
 

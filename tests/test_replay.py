@@ -104,6 +104,17 @@ class PostgresReplayTest(unittest.TestCase):
         ])
         self.assertEqual(results, [OK])
 
+    def test_schema_tracks_migrations(self):
+        self.db.create_db("empty")
+        self.db.create_db("same1", template="base")
+        self.db.create_db("same2", template="base")
+        self.db.create_db("changed", template="base")
+        self.db._psql("changed", "ALTER TABLE users ADD COLUMN name text;")
+        self.assertFalse(self.db.has_tables("empty"))
+        self.assertTrue(self.db.has_tables("same1"))
+        self.assertEqual(self.db.schema("same1"), self.db.schema("same2"))
+        self.assertNotEqual(self.db.schema("same1"), self.db.schema("changed"))
+
     def test_statements_containing_dollar_quotes(self):
         results = self.replay([Statement("SELECT $$it's$$, $x$ $mc_ $x$", 0, True)])
         self.assertEqual(results, [OK])
@@ -163,6 +174,19 @@ class MySQLReplayTest(unittest.TestCase):
             Statement("CALL _migcheck_truncate('gone')", 1, True),
         ])
         self.assertEqual(results, [OK, OK])
+
+    def test_schema_tracks_migrations(self):
+        self.db.create_db("empty")
+        self.db.create_db("same1", template="base")
+        self.db.create_db("same2", template="base")
+        self.db.create_db("changed", template="base")
+        mysql_stdin(self.db, "changed", b"ALTER TABLE users ADD COLUMN name text;")
+        # Rows move the auto-increment counter, which isn't part of the schema.
+        mysql_stdin(self.db, "same2", b"INSERT INTO users (email) VALUES ('a');")
+        self.assertFalse(self.db.has_tables("empty"))
+        self.assertTrue(self.db.has_tables("same1"))
+        self.assertEqual(self.db.schema("same1"), self.db.schema("same2"))
+        self.assertNotEqual(self.db.schema("same1"), self.db.schema("changed"))
 
     def test_binary_values(self):
         results = self.replay([Statement("INSERT INTO blobs VALUES (_binary '\udcff\udcfe')", 0, True)])

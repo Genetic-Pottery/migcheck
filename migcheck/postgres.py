@@ -184,6 +184,20 @@ class Postgres:
             sql += f' TEMPLATE "{template}"'
         self._psql("postgres", sql)
 
+    def has_tables(self, db):
+        out = self._psql(db, "COPY (SELECT count(*) FROM pg_tables "
+                             "WHERE schemaname NOT IN ('pg_catalog', 'information_schema')) TO STDOUT;")
+        return int(out) > 0
+
+    def schema(self, db):
+        """Returns the database's schema as text, for comparing two databases."""
+        assert self.container
+        dump = _run(["docker", "exec", self.container, "pg_dump", "-U", "postgres",
+                     "--schema-only", "--no-owner", "--no-privileges", db])
+        # Comments name the database, and pg_dump 17.6 and later add \restrict
+        # lines with a random key.
+        return "\n".join(line for line in dump.splitlines() if line and not line.startswith(("--", "\\")))
+
     def record(self):
         """Starts recording statements. Postgres logs every statement from
         the start, so this does nothing."""

@@ -60,6 +60,12 @@ def main():
         step(f"Applying {args.base} migrations")
         db.create_db("mc_template")
         _sh(args.migrate, base_dir, db.url("mc_template"))
+        # Without tables, both schemas stay empty and every query passes.
+        if not db.has_tables("mc_template"):
+            fail(
+                "the migrate command created no tables in the database at $DATABASE_URL. "
+                "Check that it reads its connection from DATABASE_URL, as described in RECIPES.md."
+            )
 
         step(f"Recording {args.base} workload queries")
         db.create_db("mc_capture", template="mc_template")
@@ -76,6 +82,7 @@ def main():
         db.create_db("mc_old", template="mc_template")
         db.create_db("mc_new", template="mc_template")
         _sh(args.migrate, head_dir, db.url("mc_new"))
+        schema_changed = db.schema("mc_old") != db.schema("mc_new")
 
         step(f"Replaying {len(statements)} statements against both schemas")
         old = db.replay("mc_old", statements)
@@ -89,10 +96,10 @@ def main():
                 _git(repo, "worktree", "remove", "--force", d)
         shutil.rmtree(workdir, ignore_errors=True)
 
-    sys.exit(report(db, args.base, args.head, statements, old, new, workload_exit, args.head_name))
+    sys.exit(report(db, args.base, args.head, statements, old, new, workload_exit, args.head_name, schema_changed))
 
 
-def report(db, base, head, statements, old, new, workload_exit, head_name=None):
+def report(db, base, head, statements, old, new, workload_exit, head_name=None, schema_changed=True):
     """Prints the result, writes it as Markdown if requested, and returns the exit code."""
     head_md = head_name or f"`{head}`"
     head = head_name or head
@@ -105,13 +112,28 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
     roots, knock_on = _classify(db, statements, old, new)
     count = sum(len(v) for v in roots.values())
     checked = len(statements) - skipped
-    # A workload that stopped early can pass without having run the queries
-    # that break, so a pass then carries a warning in its verdict.
-    note = ""
+    # Each note is (level, text, Markdown text). A workload that stopped early
+    # can pass without having run the queries that break, so a pass then
+    # carries a warning in its verdict.
+    notes = []
     if workload_exit:
-        note = f"The workload exited with code {workload_exit}. If it stopped early, the queries it didn't run weren't checked."
+        text = f"The workload exited with code {workload_exit}. If it stopped early, the queries it didn't run weren't checked."
         if not roots:
-            note += " To treat a failing workload as an error, use --require-workload-success."
+            text += " To treat a failing workload as an error, use --require-workload-success."
+        notes.append(("Warning" if not roots else "Note", text, text))
+    # Statements that fail on both schemas aren't checked. When many do,
+    # replay is often missing data the workload set up some other way.
+    if skipped * 10 >= len(statements):
+        text = (
+            f"{skipped} of {len(statements)} statements ({skipped * 100 // len(statements)}%) fail on {base}'s own "
+            "schema too, so migcheck didn't check them. Replay might be missing data that the workload set up "
+            "outside the recorded queries. The most common errors are listed above."
+        )
+        notes.append(("Warning", text, text.replace(f"{base}'s", f"`{base}`'s")))
+    # A migrate command that silently applies nothing passes every query.
+    if not schema_changed:
+        text = "{}'s migrations didn't change the schema. If {} adds migrations, check that --migrate applies them to $DATABASE_URL."
+        notes.append(("Note", text.format(head, head), text.format(head_md, head_md)))
 
     print()
     if skipped:
@@ -138,8 +160,8 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
                 print(f"      [{state}] {msg} ({n})")
             print()
         print(f"{base} fails during a rolling deploy of {head}, and after a rollback to {base}.")
-    if note:
-        print(f"\n{'Warning' if not roots else 'Note'}: {note}")
+    for level, text, _ in notes:
+        print(f"\n{level}: {text}")
 
     if MARKDOWN:
         md = [MARKER]
@@ -180,9 +202,9 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None):
                 md.append(f"- `{state}` {_md_escape(msg[:500])} ({n:,})")
             md.append("")
             md.append("</details>")
-        if note:
+        for level, _, text in notes:
             md.append("")
-            md.append(f"> [!{'WARNING' if not roots else 'NOTE'}]\n> {note}")
+            md.append(f"> [!{level.upper()}]\n> {text}")
         _write_markdown(md)
     return 1 if roots else 0
 

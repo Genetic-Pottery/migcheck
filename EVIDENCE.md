@@ -60,13 +60,19 @@ The database changed the verdict on 26.7.0. That release adds two columns to
 the `JGROUPS_PING` table, and 26.6.0 inserts into it with a `VALUES` list and no
 column names. Postgres fills the missing columns with `NULL`, so migcheck passed
 26.7.0 on Postgres. MySQL rejects the insert, so migcheck failed 26.7.0 on
-MySQL. On MySQL, 26.6.0 nodes can't register with the cluster during a rolling
-upgrade.
+MySQL. On MySQL, a 26.6.0 node can't register with the cluster once the
+database has the 26.7.0 schema.
 
 26.7.0 also moves each realm's display name from the `REALM_ATTRIBUTE` table to
 a new column. 26.6.0's queries still run, but they read and write the old
 location. migcheck checks that queries succeed, not what they return, so it
 doesn't catch data-only changes like this one.
+
+Keycloak supports rolling upgrades only between patch releases. Between minor
+releases, such as these, it requires stopping every node before the upgrade.
+So these breaks show what migcheck detects, not bugs in Keycloak. The two patch
+releases in these lines that change the schema add a SQL Server–only index and
+backfill data, which migcheck doesn't check.
 
 ## Mastodon
 

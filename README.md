@@ -58,35 +58,11 @@ The `NOT NULL` case is easy to miss in Django. When a migration adds a field
 with a `default`, Django fills existing rows with it and then drops the default
 from the database. The migration looks safe, but the old release's inserts fail.
 
-In a test against 25 migrations from an open-source Django app's history,
-migcheck caught 6 of the 9 breaking migrations, with no false alarms. It missed
-the other 3 because the app's tests never queried the changed tables.
+Run migcheck on the database you deploy to. The same query can pass on one
+database and fail on another.
 
-In a test against Gitea, a Go app, migcheck replayed the API tests of two
-upgrades, v1.23.8 to v1.24.7 and v1.24.7 to v1.25.5, on both Postgres and
-MySQL. Across about a million statements, it caught the one breaking migration,
-which drops a column that v1.23.8 queries, on both databases, with no false
-alarms.
-
-In a test against Ghost, a Node app on MySQL, migcheck replayed Ghost's API
-tests for two upgrades, v6.69.0 to v6.70.0 and v6.71.0 to v6.72.0, each with
-one test worker and with four. Each run replayed 180,000 to 190,000
-statements. migcheck caught all three breaks in v6.70.0, two dropped tables and
-a dropped column, and passed v6.72.0, with no false alarms.
-
-In a test against Keycloak, a Java app that uses Hibernate, migcheck replayed
-Keycloak's test suite for 26.6.0 to 26.7.0 and 26.7.0 to 26.8.0, on both
-Postgres and MySQL. Across about 14 million statements, it caught both breaking
-changes in 26.8.0, a dropped column and a new `NOT NULL` column, on both
-databases, with no false alarms.
-
-The database changed the verdict on 26.7.0. That release adds two columns to
-the `JGROUPS_PING` table, and 26.6.0 inserts into it with a `VALUES` list and no
-column names. Postgres fills the missing columns with `NULL`, so migcheck passed
-26.7.0 on Postgres. MySQL rejects the insert, so migcheck failed 26.7.0 on
-MySQL. On MySQL, 26.6.0 nodes can't register with the cluster during a rolling
-upgrade. To catch breaks like this one, run migcheck on the database you deploy
-to.
+migcheck has been tested against real upgrades of Django, Go, Node, and Java
+apps. For the results, see [EVIDENCE.md](EVIDENCE.md).
 
 ## Install
 

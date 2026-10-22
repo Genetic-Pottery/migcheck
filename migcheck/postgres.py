@@ -243,10 +243,13 @@ $f$ LANGUAGE plpgsql;""",
         # Replay reads one block at a time. Without this index, each read
         # scans every statement, which takes hours for millions of statements.
         lines.append("CREATE INDEX ON _migcheck.stmt (block, id);")
-        # Results collect in variables because a rolled-back block also rolls
-        # back any rows it wrote.
+        # Each block commits or rolls back as its own transaction. In one
+        # transaction for the whole replay, Postgres keeps every version of a
+        # row until the end, so a row updated thousands of times slows every
+        # later read of it. Results collect in variables because a rolled-back
+        # block also rolls back any rows it wrote.
         lines.append("""
-DO $do$
+CREATE PROCEDURE _migcheck.replay() AS $do$
 DECLARE
   b record;
   s record;
@@ -254,35 +257,37 @@ DECLARE
   states text[] := '{}';
   msgs text[] := '{}';
 BEGIN
-  -- Replay runs in one transaction, so deferred constraints (Django's foreign
-  -- keys, for example) would fail the whole run at commit instead of failing
-  -- the statement that broke them.
-  SET CONSTRAINTS ALL IMMEDIATE;
   FOR b IN SELECT block, bool_and(keep) AS keep FROM _migcheck.stmt GROUP BY block ORDER BY block LOOP
-    BEGIN
-      FOR s IN SELECT id, row_ids, sql FROM _migcheck.stmt WHERE block = b.block ORDER BY id LOOP
-        BEGIN
-          PERFORM set_config('migcheck.ids', s.row_ids, true);
-          PERFORM set_config('migcheck.pos', '0', true);
-          EXECUTE s.sql;
-          ids := array_append(ids, s.id);
-          states := array_append(states, NULL::text);
-          msgs := array_append(msgs, NULL::text);
-        EXCEPTION WHEN OTHERS THEN
-          ids := array_append(ids, s.id);
-          states := array_append(states, SQLSTATE);
-          msgs := array_append(msgs, SQLERRM);
-        END;
-      END LOOP;
-      IF NOT b.keep THEN
-        RAISE EXCEPTION 'migcheck rollback' USING ERRCODE = 'MC001';
-      END IF;
-    EXCEPTION WHEN SQLSTATE 'MC001' THEN NULL;
-    END;
+    -- Deferred constraints (Django's foreign keys, for example) would
+    -- otherwise fail the whole block at commit instead of failing the
+    -- statement that broke them.
+    SET CONSTRAINTS ALL IMMEDIATE;
+    FOR s IN SELECT id, row_ids, sql FROM _migcheck.stmt WHERE block = b.block ORDER BY id LOOP
+      BEGIN
+        PERFORM set_config('migcheck.ids', s.row_ids, true);
+        PERFORM set_config('migcheck.pos', '0', true);
+        EXECUTE s.sql;
+        ids := array_append(ids, s.id);
+        states := array_append(states, NULL::text);
+        msgs := array_append(msgs, NULL::text);
+      EXCEPTION WHEN OTHERS THEN
+        ids := array_append(ids, s.id);
+        states := array_append(states, SQLSTATE);
+        msgs := array_append(msgs, SQLERRM);
+      END;
+    END LOOP;
+    IF b.keep THEN
+      COMMIT;
+    ELSE
+      ROLLBACK;
+    END IF;
   END LOOP;
   INSERT INTO _migcheck.result SELECT * FROM unnest(ids, states, msgs);
 END
-$do$;
+$do$ LANGUAGE plpgsql;
+-- Replay commits once per block, and nothing needs to survive a crash.
+SET synchronous_commit = off;
+CALL _migcheck.replay();
 COPY (SELECT id, sqlstate, message FROM _migcheck.result ORDER BY id) TO STDOUT WITH CSV;
 """)
         raw = self._psql(db, "\n".join(lines))

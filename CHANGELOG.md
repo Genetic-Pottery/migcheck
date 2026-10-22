@@ -14,6 +14,12 @@
 - On MySQL, the container allows 1,000 connections instead of 151, so test
   suites that restart the app between tests don't run out.
 
+### Fixed
+
+- On Postgres, replay time no longer grows with the square of the workload's
+  size. Replay of Keycloak's 2.4 million test statements took over an hour,
+  and takes about 9 minutes.
+
 ## v0.1.2 - 2026-10-21
 
 ### Added

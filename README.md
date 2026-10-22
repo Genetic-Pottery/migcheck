@@ -74,6 +74,12 @@ one test worker and with four. Each run replayed 180,000 to 190,000
 statements. migcheck caught all three breaks in v6.70.0, two dropped tables and
 a dropped column, and passed v6.72.0, with no false alarms.
 
+In a test against Keycloak, a Java app that uses Hibernate, migcheck replayed
+Keycloak's test suite on Postgres for 26.6.0 to 26.7.0 and 26.7.0 to 26.8.0.
+Across about 6 million statements, it caught both breaking changes in 26.8.0, a
+dropped column and a new `NOT NULL` column, and passed 26.7.0, with no false
+alarms.
+
 ## Install
 
 migcheck needs Docker, git, and Python 3.10 or later. It has no Python

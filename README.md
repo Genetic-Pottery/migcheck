@@ -75,10 +75,18 @@ statements. migcheck caught all three breaks in v6.70.0, two dropped tables and
 a dropped column, and passed v6.72.0, with no false alarms.
 
 In a test against Keycloak, a Java app that uses Hibernate, migcheck replayed
-Keycloak's test suite on Postgres for 26.6.0 to 26.7.0 and 26.7.0 to 26.8.0.
-Across about 6 million statements, it caught both breaking changes in 26.8.0, a
-dropped column and a new `NOT NULL` column, and passed 26.7.0, with no false
-alarms.
+Keycloak's test suite for 26.6.0 to 26.7.0 and 26.7.0 to 26.8.0, on both
+Postgres and MySQL. Across about 14 million statements, it caught both breaking
+changes in 26.8.0, a dropped column and a new `NOT NULL` column, on both
+databases, with no false alarms.
+
+The database changed the verdict on 26.7.0. That release adds two columns to
+the `JGROUPS_PING` table, and 26.6.0 inserts into it with a `VALUES` list and no
+column names. Postgres fills the missing columns with `NULL`, so migcheck passed
+26.7.0 on Postgres. MySQL rejects the insert, so migcheck failed 26.7.0 on
+MySQL. On MySQL, 26.6.0 nodes can't register with the cluster during a rolling
+upgrade. To catch breaks like this one, run migcheck on the database you deploy
+to.
 
 ## Install
 

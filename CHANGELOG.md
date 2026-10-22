@@ -19,6 +19,9 @@
 - On Postgres, replay time no longer grows with the square of the workload's
   size. Replay of Keycloak's 2.4 million test statements took over an hour,
   and takes about 9 minutes.
+- On Postgres, a replayed insert no longer fails when a migration already
+  inserted a row with the key the workload got. The insert gets a new key, as
+  it would in production.
 
 ## v0.1.2 - 2026-10-21
 

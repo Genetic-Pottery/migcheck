@@ -36,11 +36,13 @@ class PostgresReplayTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.db.stop()
 
-    def replay(self, statements):
+    def replay(self, statements, setup=None):
         # Replay sets up its own schema, so each call needs a fresh database.
         type(self).count += 1
         name = f"replay{self.count}"
         self.db.create_db(name, template="base")
+        if setup:
+            self.db._psql(name, setup)
         return self.db.replay(name, statements)
 
     def test_reports_each_failure(self):
@@ -74,6 +76,19 @@ class PostgresReplayTest(unittest.TestCase):
             Statement("INSERT INTO posts (user_id) VALUES (42)", 1, True),
         ])
         self.assertEqual(results, [OK, OK])
+
+    def test_skips_pinning_ids_that_a_migration_took(self):
+        # A migration that inserts rows uses ids the workload also got.
+        results = self.replay([
+            Statement("INSERT INTO users (email) VALUES ('a')", 0, True, [["users", 1]]),
+        ], setup="INSERT INTO users (email) VALUES ('from-migration');")
+        self.assertEqual(results, [OK])
+
+    def test_explicit_ids_still_collide(self):
+        results = self.replay([
+            Statement("INSERT INTO users (id, email) VALUES (1, 'a')", 0, True, [["users", 1]]),
+        ], setup="INSERT INTO users (email) VALUES ('from-migration');")
+        self.assertEqual(results[0][0], "23505")
 
     def test_deferred_foreign_keys_fail_their_statement(self):
         results = self.replay([

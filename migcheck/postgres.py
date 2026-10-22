@@ -89,13 +89,22 @@ DECLARE
   ids jsonb := coalesce(nullif(current_setting('migcheck.ids', true), ''), '[]')::jsonb;
   pos int := coalesce(nullif(current_setting('migcheck.pos', true), ''), '0')::int;
   e jsonb;
+  pinned record;
+  taken bool;
 BEGIN
   IF pos < jsonb_array_length(ids) THEN
     e := ids -> pos;
     IF e ->> 0 = TG_TABLE_NAME THEN
       PERFORM set_config('migcheck.pos', (pos + 1)::text, true);
       IF e -> 1 <> 'null'::jsonb THEN
-        NEW := jsonb_populate_record(NEW, jsonb_build_object('id', e -> 1));
+        pinned := jsonb_populate_record(NEW, jsonb_build_object('id', e -> 1));
+        -- A migration that inserts rows can take ids the workload also got.
+        -- In production, the insert would get the next free id instead.
+        EXECUTE format('SELECT EXISTS (SELECT FROM %s WHERE id = ($1).id)', TG_RELID::regclass)
+          INTO taken USING pinned;
+        IF NOT taken THEN
+          NEW := pinned;
+        END IF;
       END IF;
     END IF;
   END IF;

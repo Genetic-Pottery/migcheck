@@ -1,0 +1,205 @@
+# Setup recipes
+
+These recipes show how to run migcheck on common frameworks. Each one comes
+from an app that migcheck was tested against, listed under the recipe. For
+the results, see [EVIDENCE.md](EVIDENCE.md).
+
+## How migcheck runs your commands
+
+migcheck runs `--migrate` twice:
+
+1. In a checkout of the base release, against an empty database.
+2. In a checkout of the head release, against a copy of the database from
+   step 1.
+
+So the migrate command must work on an empty database and on a database that
+already has the base release's schema.
+
+migcheck runs `--workload` once, in the base release's checkout, against
+another copy of the database from step 1. Test runners that create their own
+database on the same server, such as Django's `test_<name>`, also work.
+
+Both commands run with `DATABASE_URL` set. The commands run on your machine,
+so the services your tests need, other than the database, must already be
+running. For example, Mastodon's specs need Redis.
+
+## Apps that don't read DATABASE_URL
+
+Many apps read the host, port, and credentials from separate settings. To
+run one of them, wrap each command in a script that splits `DATABASE_URL` and
+sets the app's own variables:
+
+```sh
+#!/usr/bin/env bash
+# Splits $DATABASE_URL into separate variables, then runs the command.
+set -euo pipefail
+eval "$(python3 - <<'PY'
+import os, shlex, urllib.parse as u
+p = u.urlparse(os.environ["DATABASE_URL"])
+for k, v in {"DB_HOST": p.hostname, "DB_PORT": p.port, "DB_USER": p.username,
+             "DB_PASSWORD": p.password, "DB_NAME": p.path[1:]}.items():
+    print(f"export {k}={shlex.quote(str(v))}")
+PY
+)"
+exec "$@"
+```
+
+Rename the variables to the ones your app reads. If the app reads a config
+file instead, generate the file from these variables before running the
+command. Gitea needed a config step like this.
+
+## Django
+
+```sh
+migcheck --base v1.4.0 --head main \
+  --migrate "python manage.py migrate" \
+  --workload "pytest --create-db"
+```
+
+- Your settings must read `DATABASE_URL`, for example with
+  `dj-database-url`.
+- pytest-django creates its own `test_<name>` database and runs the
+  migrations in it. `--create-db` stops it from reusing a database from an
+  earlier run.
+
+Tested with Plane.
+
+## Rails
+
+```sh
+migcheck --base v5.1.0 --head main \
+  --migrate "RAILS_ENV=test bin/rails db:migrate" \
+  --workload "RAILS_ENV=test bin/rails test"
+```
+
+- Rails reads `DATABASE_URL`. For MySQL, change the scheme to `mysql2://` in
+  each command:
+
+  ```sh
+  --migrate 'DATABASE_URL=mysql2${DATABASE_URL#mysql} RAILS_ENV=test bin/rails db:migrate'
+  ```
+
+- `db:migrate` runs every migration from the start of the app's history on
+  the empty database. If old migrations no longer run, use `db:prepare`,
+  which loads `db/schema.rb` into an empty database and migrates an existing
+  one.
+- If your app has post-deployment migrations, apply only the
+  pre-deployment set. See [Apps that deploy in two steps](README.md#apps-that-deploy-in-two-steps).
+  In Mastodon, set `SKIP_POST_DEPLOYMENT_MIGRATIONS=true`. In the
+  development environment, also set `SKIP_TEST_DATABASE=true`. Otherwise
+  `db:prepare` loads the test database's schema, and that turns the
+  post-deployment migrations back on.
+- If your views need compiled frontend assets, build them in the workload
+  before the tests run. Without them, view and controller tests fail early
+  and skip their queries.
+
+Tested with Mastodon on Postgres and Redmine on MySQL.
+
+## SQLAlchemy and Alembic
+
+```sh
+migcheck --base v2.0.0 --head main \
+  --migrate "alembic upgrade head" \
+  --workload "pytest"
+```
+
+If your app applies migrations from its own startup script, run that script
+instead. Mealie's `mealie/db/init_db.py` runs Alembic and creates the default
+data.
+
+Tested with Mealie, which reads separate `POSTGRES_*` variables, so its
+commands ran inside a wrapper like the one above.
+
+## Go
+
+Go apps usually have their own migrate command. For Gitea:
+
+```sh
+migcheck --base v1.24.7 --head v1.25.5 \
+  --migrate "./migrate.sh" \
+  --workload "./workload.sh"
+```
+
+- Build the binary inside each script, because migcheck runs the scripts in
+  a fresh checkout of each release.
+- Gitea's migrate script writes an `app.ini` from `DATABASE_URL` and runs
+  `gitea migrate`. Its workload script generates the integration test config
+  and runs the compiled test binary.
+
+Tested with Gitea on Postgres and MySQL.
+
+## Node with Knex
+
+```sh
+migcheck --db mysql --base v6.69.0 --head v6.70.0 \
+  --migrate "npx knex migrate:latest" \
+  --workload "npm test"
+```
+
+- Install dependencies inside the commands. migcheck checks out each release
+  fresh, so `node_modules` isn't there.
+- Ghost uses `knex-migrator migrate --init` instead of `knex migrate:latest`,
+  and reads its connection from `database__connection__*` variables.
+
+Tested with Ghost on MySQL, with one test worker and with four.
+
+## Apps that migrate on startup
+
+Some apps, such as Keycloak and many Spring Boot apps with Flyway or
+Liquibase, apply migrations when they start. For these, the migrate command
+starts the app, waits until it's ready, and stops it:
+
+```sh
+#!/usr/bin/env bash
+# Starts the app, which migrates $DATABASE_URL on startup, then stops it.
+set -euo pipefail
+log=$(mktemp)
+# setsid gives the app its own process group, so the trap stops its children too.
+setsid ./bin/start-app > "$log" 2>&1 &
+pid=$!
+trap 'kill -- -$pid 2>/dev/null; wait $pid 2>/dev/null || true' EXIT
+for _ in $(seq 300); do
+  grep -q "started in" "$log" && exit 0
+  kill -0 $pid 2>/dev/null || { tail -20 "$log" >&2; exit 1; }
+  sleep 1
+done
+echo "The app didn't start in 5 minutes" >&2
+exit 1
+```
+
+Replace `./bin/start-app` with the app's start command, and `started in`
+with the line it logs when it's ready.
+
+- On the first start, create any admin user or seed data the tests expect.
+  Keycloak's tests log in as a bootstrap admin, so the migrate script passed
+  the same credentials.
+- `setsid` is part of util-linux. On macOS, install it or stop the process
+  another way.
+
+Tested with Keycloak on Postgres and MySQL.
+
+## Check your setup
+
+A wrong setup often still produces a result. Check the following before
+trusting one:
+
+- **The statement count.** If migcheck replays far fewer statements than
+  your test suite makes, the workload probably stopped early or ran against
+  another database.
+- **The workload's exit code.** A pass with a warning means the workload
+  failed. Read its output and fix test failures that come from the
+  environment, such as missing assets or services.
+- **The skipped statements.** The report lists the most common errors among
+  the statements that fail on both schemas. Errors from your test suite's own
+  setup are normal. Errors that point to missing data mean replay lost rows
+  that later queries needed.
+- **The migrations that ran.** If the result reports breaks from migrations
+  you meant to skip, log the migrate command's output and check which
+  migrations it applied.
+
+## Stacks not tested yet
+
+The following stacks haven't been tested: Laravel, Prisma, TypeORM,
+Sequelize, Entity Framework, Ecto, and Diesel. migcheck doesn't depend on the
+framework, so the general steps above apply, but expect setup problems like
+the ones these recipes describe.

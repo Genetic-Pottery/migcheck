@@ -7,6 +7,8 @@
 - `--require-workload-success`, and the action's `require-workload-success`
   input, make a failing workload exit with code `2`.
 - The report lists the most common errors among the statements it skipped.
+- `RECIPES.md` shows how to set up migcheck for Django, Rails, SQLAlchemy, Go,
+  Knex, and apps that migrate on startup.
 
 ### Changed
 

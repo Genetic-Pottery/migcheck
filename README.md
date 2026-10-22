@@ -111,6 +111,9 @@ migcheck --base v1.4.0 --head main \
   --workload "pytest"
 ```
 
+For Rails, SQLAlchemy, Go, Node, and apps that migrate on startup, and for
+apps that don't read `DATABASE_URL`, see [RECIPES.md](RECIPES.md).
+
 migcheck exits with one of the following codes:
 
 | Code | Meaning |

@@ -61,8 +61,8 @@ from the database. The migration looks safe, but the old release's inserts fail.
 Run migcheck on the database you deploy to. The same query can pass on one
 database and fail on another.
 
-migcheck has been tested against real upgrades of Django, Go, Node, and Java
-apps. For the results, see [EVIDENCE.md](EVIDENCE.md).
+migcheck has been tested against real upgrades of Django, Rails, Go, Node, and
+Java apps. For the results, see [EVIDENCE.md](EVIDENCE.md).
 
 ## Install
 
@@ -124,6 +124,18 @@ queries, so migcheck checks the queries it ran. If none of them break,
 migcheck reports a pass with a warning, because a workload that stopped early
 can skip the queries that break. To make a failing workload exit with code `2`
 instead, use `--require-workload-success`.
+
+### Apps that deploy in two steps
+
+Some apps split their migrations into two sets. The first set runs before the
+new release rolls out, and the second runs after every server of the old
+release has stopped. Mastodon and GitLab call the second set post-deployment
+migrations.
+
+The old release never runs against the second set, so `--migrate` must apply
+only the first. Otherwise migcheck reports breaks that the app's deploy
+process already avoids. For example, Mastodon skips its post-deployment
+migrations when `SKIP_POST_DEPLOYMENT_MIGRATIONS` is set.
 
 ### Options
 
@@ -265,7 +277,9 @@ migcheck also accounts for how test runners use the database:
   between tests doesn't depend on the schema.
 - On Postgres, it records the primary key of each row the workload inserts
   and gives replayed inserts the same keys, so later statements that
-  reference those rows find them. On MySQL, replay starts from the same
+  reference those rows find them. If a migration already inserted a row with
+  that key, the replayed insert gets a new key instead, as it would in
+  production. On MySQL, replay starts from the same
   auto-increment counters as the workload, so inserts get the same keys when
   the workload runs one test at a time.
 

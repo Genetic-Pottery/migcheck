@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `--version` prints migcheck's version.
+
 ## v0.2.0 - 2026-10-22
 
 ### Added

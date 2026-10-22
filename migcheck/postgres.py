@@ -240,6 +240,9 @@ $f$ LANGUAGE plpgsql;""",
         for i, s in enumerate(statements):
             ids = json.dumps(s.ids)
             lines.append(f"INSERT INTO _migcheck.stmt VALUES ({i}, {s.block}, {s.keep}, {tag}{ids}{tag}, {tag}{s.sql}{tag});")
+        # Replay reads one block at a time. Without this index, each read
+        # scans every statement, which takes hours for millions of statements.
+        lines.append("CREATE INDEX ON _migcheck.stmt (block, id);")
         # Results collect in variables because a rolled-back block also rolls
         # back any rows it wrote.
         lines.append("""

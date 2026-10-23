@@ -1,8 +1,8 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. All results
-reflect migcheck 0.2.0. When a release changes how migcheck records or replays
+apps. Each run used the app's own test suite as the workload. The n8n results
+reflect migcheck 0.2.1, and the others reflect migcheck 0.2.0. When a release changes how migcheck records or replays
 queries, the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
@@ -12,8 +12,10 @@ queries, the affected results are rerun.
 | Ghost | Knex (Node) | MySQL | 2 | Caught all 3 breaks |
 | Keycloak | Hibernate (Java) | Postgres, MySQL | 2 | Caught all 3 breaks |
 | Mastodon | Active Record (Rails) | Postgres | 2 | Passed both, as designed |
+| n8n | TypeORM (Node) | Postgres | 2 | Caught the 1 break, with 1 false alarm |
 
-No run raised a false alarm, after the fix described in the Mastodon section.
+The n8n run raised the only false alarm left after the fix described in the
+Mastodon section. For details, see the n8n section.
 
 ## Plane
 
@@ -112,3 +114,30 @@ insert a new key when a migration already took its key.
 The workload skipped Mastodon's browser specs and search specs. 14 of the
 remaining 7,121 specs failed, because the Redis configuration specs expect a
 default Redis URL. Those specs don't query the database.
+
+## n8n
+
+migcheck replayed n8n's CLI integration tests on Postgres for two upgrades,
+2.40.6 to 2.41.7 and 2.44.6 to 2.45.3.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| 2.40.6 to 2.41.7 | 486,841 | Fail |
+| 2.44.6 to 2.45.3 | 602,226 | Pass |
+
+migcheck caught the one break in 2.41.7. That release adds
+`ai_preference.source` as `NOT NULL` with no default, on purpose, so that every
+write must name its source. 2.40.6's 37 inserts into `ai_preference` don't set
+it. The 2.45.3 migrations add columns with defaults, drop a `NOT NULL`, and add
+a check that 2.44.6's rows meet, so migcheck passed it.
+
+The 2.41.7 run also raised a false alarm. A 2.41.7 migration inserts three rows
+into the `scope` table. At startup, 2.40.6 reads the `scope` table and inserts
+the scopes that are missing. Replay runs the recorded insert, which includes
+the three scopes the migration added, so it fails on the primary key. A real
+2.40.6 server reads the table first and skips those scopes. The insert also
+caused 227 later failures in the same transaction, which the report lists
+separately.
+
+Each run passed about 7,000 to 8,600 tests. 4 tests failed in each run, at
+least 2 of them because `openssl` wasn't installed.

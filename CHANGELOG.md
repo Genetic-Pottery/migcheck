@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `RECIPES.md` shows how to set up migcheck for TypeORM, tested with n8n.
+- `EVIDENCE.md` includes the n8n test, which found a false alarm when a
+  migration inserts rows that the old release inserts only if they're missing.
+
 ## v0.2.1 - 2026-10-23
 
 ### Added

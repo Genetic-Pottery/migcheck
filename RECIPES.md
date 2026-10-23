@@ -143,6 +143,48 @@ migcheck --db mysql --base v6.69.0 --head v6.70.0 \
 
 Tested with Ghost on MySQL, with one test worker and with four.
 
+## Node with TypeORM
+
+```sh
+migcheck --base v2.0.0 --head main \
+  --migrate "npx typeorm migration:run -d dist/data-source.js" \
+  --workload "npm test"
+```
+
+- If your app runs its migrations from its own code instead of the TypeORM
+  CLI, call that code from a short script. n8n has no migrate command, so its
+  migrate script ran this file from `packages/cli`:
+
+  ```js
+  require('reflect-metadata');
+  const { Container } = require('@n8n/di');
+  const { DbConnection } = require('@n8n/db');
+
+  (async () => {
+    const db = Container.get(DbConnection);
+    await db.init();
+    await db.migrate();
+    await db.close();
+  })().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+  ```
+
+- If each test file creates its own database and runs every migration in it,
+  parallel test workers can exhaust Postgres's lock table. The workload then
+  fails with `out of shared memory`, and the hint names
+  `max_locks_per_transaction`. Migrate one template database before the tests
+  start, and have each test file create its database with
+  `CREATE DATABASE ... TEMPLATE`. n8n supports this when
+  `N8N_TEST_TEMPLATE_DB` is set. A Vitest global setup created the template
+  with `testDb.initTemplateDb()` and set the variable.
+- Name the template so that the test suite's own cleanup doesn't drop it.
+  Postgres doesn't drop a database marked as a template.
+
+Tested with n8n, which reads separate `DB_POSTGRESDB_*` variables, so its
+commands ran inside a wrapper like the one above.
+
 ## Apps that migrate on startup
 
 Some apps, such as Keycloak and many Spring Boot apps with Flyway or
@@ -208,7 +250,7 @@ Check the following yourself before trusting a result:
 
 ## Stacks not tested yet
 
-The following stacks haven't been tested: Laravel, Prisma, TypeORM,
-Sequelize, Entity Framework, Ecto, and Diesel. migcheck doesn't depend on the
-framework, so the general steps above apply, but expect setup problems like
-the ones these recipes describe.
+The following stacks haven't been tested: Laravel, Prisma, Sequelize, Entity
+Framework, Ecto, and Diesel. migcheck doesn't depend on the framework, so the
+general steps above apply, but expect setup problems like the ones these
+recipes describe.

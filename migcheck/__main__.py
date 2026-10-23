@@ -16,6 +16,7 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 
+from .common import MIGRATED_KEY
 from .mysql import MySQL
 from .postgres import Postgres
 
@@ -83,12 +84,13 @@ def main():
         step(f"Applying {args.head} migrations")
         db.create_db("mc_old", template="mc_template")
         db.create_db("mc_new", template="mc_template")
+        migrated_after = db.mark()
         _sh(args.migrate, head_dir, db.url("mc_new"))
         schema_changed = db.schema("mc_old") != db.schema("mc_new")
 
         step(f"Replaying {len(statements)} statements against both schemas")
         old = db.replay("mc_old", statements)
-        new = db.replay("mc_new", statements)
+        new = db.replay("mc_new", statements, migrated_after)
     except Exception as e:  # Exit code 1 means a query breaks, so nothing else may use it.
         fail(f"{type(e).__name__}: {e}")
     finally:
@@ -155,6 +157,8 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None, 
             print(f"      {len(stmts)} statements in {_blocks(stmts)} transactions. Examples:")
             for sql in _examples(stmts, 160):
                 print(f"      {sql}")
+            if msg.endswith(MIGRATED_KEY):
+                print(f"      {_migrated_key_note(base, head)}")
             print()
         if knock_on:
             print("  Later failures in the same transactions, likely caused by the errors above:")
@@ -186,6 +190,9 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None, 
                 md.append("```sql")
                 md.extend(_examples(stmts, 500))
                 md.append("```")
+                if msg.endswith(MIGRATED_KEY):
+                    md.append("")
+                    md.append(_migrated_key_note(f"`{base}`", head_md))
             if knock_on:
                 md.append("")
                 md.append("<details><summary>Later failures in the same transactions, likely caused by the errors above</summary>")
@@ -234,6 +241,13 @@ def _classify(db, statements, old, new):
         broken_blocks.add(s.block)
         roots[key].append(s)
     return roots, knock_on
+
+
+def _migrated_key_note(base, head):
+    return (
+        f"{head}'s migrations inserted a row with this key. If {base} checks for the row before "
+        "inserting it, as code that seeds missing rows does, this isn't a break."
+    )
 
 
 def _skip_reasons(old, limit=5):

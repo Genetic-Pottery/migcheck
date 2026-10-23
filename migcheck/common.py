@@ -3,6 +3,11 @@
 import subprocess
 from dataclasses import dataclass, field
 
+# Appended to a duplicate key error when a row that the head migrations
+# inserted holds the key. The old release might check for that row before
+# inserting, which replay can't see, so the report explains this case.
+MIGRATED_KEY = ", on a key that a row from the head migrations holds"
+
 
 @dataclass
 class Statement:

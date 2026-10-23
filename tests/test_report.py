@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from migcheck import __main__ as cli
-from migcheck.common import Statement
+from migcheck.common import MIGRATED_KEY, Statement
 from migcheck.postgres import Postgres
 
 OK = (None, None)
@@ -150,6 +150,17 @@ class ReportTest(unittest.TestCase):
         self.assertIn("**`42703` column &lt;a\\_b> missing**", md)
         self.assertIn("```sql\nSELECT a_b FROM t\n```", md)
         self.assertIn("- `23502` null value (1)", md)
+
+    def test_explains_keys_that_a_migration_inserted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cli.MARKDOWN = os.path.join(tmp, "result.md")
+            new = [("23505", "duplicate key" + MIGRATED_KEY)]
+            code, out = run_report([Statement("INSERT", 0, True)], [OK], new)
+            with open(cli.MARKDOWN) as f:
+                md = f.read()
+        self.assertEqual(code, 1)
+        self.assertIn("v2's migrations inserted a row with this key. If v1 checks", out)
+        self.assertIn("`v2`'s migrations inserted a row with this key. If `v1` checks", md)
 
     def test_markdown_lists_skip_reasons(self):
         with tempfile.TemporaryDirectory() as tmp:

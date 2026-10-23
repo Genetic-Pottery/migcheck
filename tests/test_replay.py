@@ -6,7 +6,7 @@ They're skipped when Docker isn't available.
 
 import unittest
 
-from migcheck.common import Statement
+from migcheck.common import MIGRATED_KEY, Statement
 from migcheck.mysql import MySQL
 from migcheck.postgres import Postgres
 
@@ -36,14 +36,18 @@ class PostgresReplayTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.db.stop()
 
-    def replay(self, statements, setup=None):
+    def replay(self, statements, setup=None, migration=None):
         # Replay sets up its own schema, so each call needs a fresh database.
         type(self).count += 1
         name = f"replay{self.count}"
         self.db.create_db(name, template="base")
         if setup:
             self.db._psql(name, setup)
-        return self.db.replay(name, statements)
+        mark = None
+        if migration:
+            mark = self.db.mark()
+            self.db._psql(name, migration)
+        return self.db.replay(name, statements, mark)
 
     def test_reports_each_failure(self):
         results = self.replay([
@@ -89,6 +93,36 @@ class PostgresReplayTest(unittest.TestCase):
             Statement("INSERT INTO users (id, email) VALUES (1, 'a')", 0, True, [["users", 1]]),
         ], setup="INSERT INTO users (email) VALUES ('from-migration');")
         self.assertEqual(results[0][0], "23505")
+
+    def test_labels_keys_that_a_migration_inserted(self):
+        results = self.replay([
+            Statement("INSERT INTO users (email) VALUES ('seeded')", 0, True),
+        ], migration="INSERT INTO users (email) VALUES ('seeded');")
+        self.assertEqual(results[0][0], "23505")
+        self.assertTrue(results[0][1].endswith(MIGRATED_KEY))
+
+    def test_does_not_label_keys_from_before_the_migrations(self):
+        results = self.replay([
+            Statement("INSERT INTO users (email) VALUES ('old')", 0, True),
+        ], setup="INSERT INTO users (email) VALUES ('old');", migration="SELECT 1;")
+        self.assertEqual(results[0], ("23505", 'duplicate key value violates unique constraint "users_email_key"'))
+
+    def test_does_not_label_keys_that_replay_inserted(self):
+        results = self.replay([
+            Statement("INSERT INTO users (email) VALUES ('twice')", 0, True),
+            Statement("INSERT INTO users (email) VALUES ('twice')", 1, True),
+        ], migration="SELECT 1;")
+        self.assertEqual(results[1], ("23505", 'duplicate key value violates unique constraint "users_email_key"'))
+
+    def test_checking_a_key_leaves_no_rows(self):
+        # The second row collides. Checking it runs the insert again, and the
+        # first row of that run must not stay.
+        results = self.replay([
+            Statement("INSERT INTO users (email) VALUES ('a'), ('seeded')", 0, True),
+            Statement("INSERT INTO users (email) VALUES ('a')", 0, True),
+        ], migration="INSERT INTO users (email) VALUES ('seeded');")
+        self.assertTrue(results[0][1].endswith(MIGRATED_KEY))
+        self.assertEqual(results[1], OK)
 
     def test_deferred_foreign_keys_fail_their_statement(self):
         results = self.replay([

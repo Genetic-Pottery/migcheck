@@ -166,7 +166,12 @@ class MySQL:
             raise RuntimeError(f"reading the MySQL log failed with exit code {proc.returncode}")
         return statements
 
-    def replay(self, db, statements):
+    def mark(self):
+        """MySQL doesn't record which transaction wrote a row, so replay can't
+        tell rows from the head migrations apart. Returns None."""
+        return None
+
+    def replay(self, db, statements, migrated_after=None):
         """Runs each statement in order and returns a list of (error code, message).
 
         A statement that succeeds keeps its effects until the end of its

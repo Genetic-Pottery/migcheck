@@ -139,5 +139,10 @@ the three scopes the migration added, so it fails on the primary key. A real
 caused 227 later failures in the same transaction, which the report lists
 separately.
 
+migcheck still fails this insert, because an old release that inserts without
+checking first breaks in production. The report labels it: it says that a row
+from the head migrations holds the key, and that the insert isn't a break if
+the old release checks for the row first.
+
 Each run passed about 7,000 to 8,600 tests. 4 tests failed in each run, at
 least 2 of them because `openssl` wasn't installed.

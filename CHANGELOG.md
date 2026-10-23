@@ -8,6 +8,13 @@
 - `EVIDENCE.md` includes the n8n test, which found a false alarm when a
   migration inserts rows that the old release inserts only if they're missing.
 
+### Changed
+
+- On Postgres, when an insert breaks because a row from the head release's
+  migrations holds its key, the report says so. The insert isn't a break if
+  the base release checks for the row before inserting it, which replay can't
+  see. The result still fails.
+
 ## v0.2.1 - 2026-10-23
 
 ### Added

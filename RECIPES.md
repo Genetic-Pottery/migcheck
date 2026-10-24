@@ -206,6 +206,28 @@ migcheck --base v1.0.0 --head main \
 Tested with Lemmy, which reads `LEMMY_DATABASE_URL`, so its scripts set it from
 `DATABASE_URL`.
 
+## Elixir with Ecto
+
+```sh
+migcheck --base v3.0.0 --head main \
+  --migrate "MIX_ENV=test mix ecto.migrate" \
+  --workload "mix test"
+```
+
+- Ecto reads its connection from the repo's config. Separate settings, such
+  as `hostname` and `database`, take precedence over `url`. Split
+  `DATABASE_URL` into each setting, in a file the test config imports. Akkoma
+  imports `config/test.secret.exs` when it exists.
+- Ecto's SQL sandbox works with replay. Each test's statements replay in one
+  transaction that rolls back, as they do in the test. Replay ignores
+  savepoints, so a test that rolls back to a savepoint keeps those rows in
+  replay.
+- If your native dependencies are hard to install, run the commands in your
+  CI image with `docker run --network host`, so the container reaches the
+  database at `DATABASE_URL`.
+
+Tested with Akkoma, whose commands ran in its CI image.
+
 ## Apps that migrate on startup
 
 Some apps, such as Keycloak and many Spring Boot apps with Flyway or
@@ -277,7 +299,7 @@ Check the following yourself before trusting a result:
 
 ## Stacks not tested yet
 
-The following stacks haven't been tested: Laravel, Prisma, Sequelize, Entity
-Framework, and Ecto. migcheck doesn't depend on the framework, so the general
+The following stacks haven't been tested: Laravel, Prisma, Sequelize, and
+Entity Framework. migcheck doesn't depend on the framework, so the general
 steps above apply, but expect setup problems like the ones these recipes
 describe.

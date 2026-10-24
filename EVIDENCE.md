@@ -1,8 +1,10 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. The n8n and Lemmy
-results reflect migcheck 0.2.1, and the others reflect migcheck 0.2.0. When a release changes how migcheck records or replays
+apps. Each run used the app's own test suite as the workload. The Akkoma results
+reflect migcheck 0.2.1 with the comment fix listed under Unreleased in the
+changelog. The n8n and Lemmy results reflect migcheck 0.2.1, and the others
+reflect migcheck 0.2.0. When a release changes how migcheck records or replays
 queries, the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
@@ -14,6 +16,7 @@ queries, the affected results are rerun.
 | Mastodon | Active Record (Rails) | Postgres | 2 | Passed both, as designed |
 | n8n | TypeORM (Node) | Postgres | 2 | Caught the 1 break, with 1 false alarm |
 | Lemmy | Diesel (Rust) | Postgres | 2 | Caught the 1 break |
+| Akkoma | Ecto (Elixir) | Postgres | 2 | Caught all 4 breaks |
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
@@ -176,3 +179,43 @@ schemas. The verdicts didn't change.
 
 Each run passed 270 to 280 tests. 2 tests failed in each run, because they
 fetch pages from the internet.
+
+## Akkoma
+
+migcheck replayed Akkoma's tests on Postgres for two upgrades, v3.18.1 to
+v3.19.0 and v3.19.0 to v3.20.1. Akkoma is a fork of Pleroma.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| v3.18.1 to v3.19.0 | 76,342 | Fail |
+| v3.19.0 to v3.20.1 | 74,256 | Pass |
+
+migcheck caught all four breaks in v3.19.0, in 21,773 statements:
+
+- v3.19.0 drops `users.skip_thread_containment`. Ecto names every field in
+  its queries, so most of v3.18.1's reads and writes of `users` break.
+- v3.19.0 drops `lists.ap_id`, which v3.18.1 reads and writes.
+- v3.19.0 drops the `activity_visibility` and `thread_visibility` functions,
+  which v3.18.1's timeline queries call.
+
+v3.20.1's migrations add a column, replace indexes, and backfill data, so
+migcheck passed it. v3.20.1 also replaces the unique index on
+`users.nickname` with one under another name. v3.19.0 maps the old index's
+name to a "nickname taken" error, so a duplicate nickname raises an exception
+instead. The insert fails on both schemas, so migcheck doesn't catch this.
+The tests didn't insert a duplicate nickname, so the run didn't show it.
+
+Ecto's test sandbox runs each test in a transaction that it rolls back, and
+turns the test's own transactions into savepoints. Replay rolls back each
+test's transaction too, but it ignores savepoints, so it doesn't undo a
+rollback to a savepoint. Only 18 statements failed on both schemas, so this
+didn't cost the run any data that later queries needed.
+
+This test found a bug in migcheck. One of Akkoma's queries has a comment with
+"won't" in it, and migcheck read the apostrophe as the start of a string. It
+left the query's later parameters unfilled, so the query failed on both
+schemas. migcheck now skips comments.
+
+Each run passed about 4,150 tests, and 1 test failed in each. The first run of
+v3.18.1's tests under migcheck had 96 failures, which didn't happen again
+with the same random seed.

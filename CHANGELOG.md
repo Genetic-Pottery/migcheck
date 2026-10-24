@@ -10,6 +10,8 @@
 - `RECIPES.md` shows how to set up migcheck for Diesel, tested with Lemmy, and
   how to give replay the settings an app passes in its connection string.
 - `EVIDENCE.md` includes the Lemmy test.
+- `RECIPES.md` shows how to set up migcheck for Ecto, and `EVIDENCE.md`
+  includes the Akkoma test.
 
 ### Changed
 

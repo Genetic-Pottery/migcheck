@@ -14,6 +14,8 @@
   includes the Akkoma test.
 - `RECIPES.md` shows how to set up migcheck for Laravel, and `EVIDENCE.md`
   includes the BookStack test on MySQL.
+- `RECIPES.md` shows how to set up migcheck for Entity Framework, and
+  `EVIDENCE.md` includes the Bitwarden test.
 
 ### Changed
 

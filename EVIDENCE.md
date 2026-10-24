@@ -1,11 +1,12 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. The Akkoma results
-reflect migcheck 0.2.1 with the comment fix listed under Unreleased in the
-changelog. The BookStack results reflect the same version. The n8n and Lemmy results reflect migcheck 0.2.1, and the others
-reflect migcheck 0.2.0. When a release changes how migcheck records or replays
-queries, the affected results are rerun.
+apps. Each run used the app's own test suite as the workload. The Akkoma and
+BookStack results reflect migcheck 0.2.1 with the comment fix listed under
+Unreleased in the changelog. The Bitwarden results also include the `DISCARD`
+fix listed there. The n8n and Lemmy results reflect migcheck 0.2.1, and the
+others reflect migcheck 0.2.0. When a release changes how migcheck records or
+replays queries, the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
 |---|---|---|---|---|
@@ -18,6 +19,7 @@ queries, the affected results are rerun.
 | Lemmy | Diesel (Rust) | Postgres | 2 | Caught the 1 break |
 | Akkoma | Ecto (Elixir) | Postgres | 2 | Caught all 4 breaks |
 | BookStack | Laravel (PHP) | MySQL | 4 | Caught all 4 breaks |
+| Bitwarden | Entity Framework (.NET) | Postgres | 4 | Caught all 5 breaks |
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
@@ -254,3 +256,46 @@ v26.05.3. migcheck passed it and noted that the schema didn't change.
 No statement failed on both schemas in any run. The tests ran in a PHP 8.3
 image. In two runs, one or two image thumbnail tests failed because of the
 image's GD build. The other tests passed.
+
+## Bitwarden
+
+migcheck replayed the Postgres tests in Bitwarden server's
+`Infrastructure.IntegrationTest` project for four upgrades. Those tests run
+Bitwarden's Entity Framework repositories against a real database. Bitwarden's
+other tests use SQLite in memory, so they can't serve as a workload.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| v2026.4.2 to v2026.5.0 | 5,680 | Pass |
+| v2026.5.0 to v2026.6.2 | 3,200 | Pass |
+| v2026.6.2 to v2026.7.2 | 3,591 | Fail |
+| v2026.9.2 to v2026.10.0 | 5,888 | Fail |
+
+migcheck caught both breaks in v2026.7.2, in 23 statements. v2026.7.2 drops
+`OrganizationInviteLink.EncryptedOrgKey` and renames
+`OrganizationInviteLink.EncryptedInviteKey`.
+
+migcheck caught all three breaks in v2026.10.0, in 276 statements.
+v2026.10.0 renames `AccessRequest.Status`, `AccessRequest.ResolvedDate`, and
+`AccessLease.Status`. Postgres reports only the first missing column in a
+statement. The statements that use `AccessRequest.Status` also use
+`ResolvedDate`, so the report lists them under `ResolvedDate`.
+
+v2026.5.0 and v2026.6.2 add tables, indexes, and columns with defaults, so
+migcheck passed them. v2026.6.2 also makes `Send.Key` and `Send.Data` NOT
+NULL. v2026.5.0's tests never write a Send without them, so this isn't a
+break for the tests either.
+
+Bitwarden releases backport many migrations to patch releases. For example,
+v2026.2.1 already includes v2026.3.0's migration that drops
+`Send.EmailHashes`. These runs compare the latest patch of each release.
+
+This test found a gap in migcheck. Npgsql sends `DISCARD ALL` each time the
+app returns a connection to the pool. Those statements failed on both
+schemas and made up 34% to 46% of each run, so the report warned that
+migcheck hadn't checked them. migcheck now drops them. The results didn't
+change.
+
+In v2026.9.2's runs, one test failed with a serialization error. It fails
+about half the time without migcheck too. The tests ran in the .NET SDK image
+that each release's `global.json` names.

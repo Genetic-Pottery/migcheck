@@ -251,6 +251,30 @@ migcheck --db mysql --base v1.0.0 --head main \
 
 Tested with BookStack on MySQL, whose commands ran in a PHP 8.3 image.
 
+## .NET with Entity Framework
+
+```sh
+migcheck --base v1.0.0 --head main \
+  --migrate 'dotnet tool restore && dotnet ef database update --connection "$CONN"' \
+  --workload "dotnet test"
+```
+
+- EF Core providers take a connection string, not a URL. Wrap the commands
+  in a script that converts `DATABASE_URL` and sets `CONN`, as described in
+  [Apps that don't read DATABASE_URL](#apps-that-dont-read-database_url).
+  For Npgsql, the form is
+  `Host=...;Port=...;Username=...;Password=...;Database=...`.
+- Run tests that use the real database. Tests that use SQLite in memory, or
+  EF Core's in-memory provider, send no queries to the server. Bitwarden's
+  `Infrastructure.IntegrationTest` project reads its databases from
+  `BW_TEST_DATABASES__*` variables.
+- If the SDK is hard to install, run the commands in the
+  `mcr.microsoft.com/dotnet/sdk` image that matches `global.json`, with
+  `docker run --network host`, so the container reaches the database at
+  `DATABASE_URL`.
+
+Tested with Bitwarden server on Postgres.
+
 ## Apps that migrate on startup
 
 Some apps, such as Keycloak and many Spring Boot apps with Flyway or
@@ -322,7 +346,6 @@ Check the following yourself before trusting a result:
 
 ## Stacks not tested yet
 
-The following stacks haven't been tested: Prisma, Sequelize, and Entity
-Framework. migcheck doesn't depend on the framework, so the general
-steps above apply, but expect setup problems like the ones these recipes
-describe.
+The following stacks haven't been tested: Prisma and Sequelize. migcheck
+doesn't depend on the framework, so the general steps above apply, but
+expect setup problems like the ones these recipes describe.

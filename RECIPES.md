@@ -228,6 +228,29 @@ migcheck --base v3.0.0 --head main \
 
 Tested with Akkoma, whose commands ran in its CI image.
 
+## PHP with Laravel
+
+```sh
+migcheck --db mysql --base v1.0.0 --head main \
+  --migrate "composer install && php artisan migrate --force" \
+  --workload "php artisan db:seed --force && php vendor/bin/phpunit"
+```
+
+- Laravel reads a connection's `url` setting and uses it over the separate
+  settings. Point that setting's environment variable at `DATABASE_URL`.
+  BookStack's test connection reads `TEST_DATABASE_URL`.
+- Seed the database in the workload, not in the migrate command. migcheck
+  runs the migrate command a second time on a database that holds the first
+  run's rows, so a seeder there runs twice.
+- Laravel's `DatabaseTransactions` trait works with replay. Each test's
+  statements replay in one transaction that rolls back, as they do in the
+  test.
+- If PHP's extensions are hard to install, run the commands in a PHP image
+  with `docker run --network host`, so the container reaches the database at
+  `DATABASE_URL`.
+
+Tested with BookStack on MySQL, whose commands ran in a PHP 8.3 image.
+
 ## Apps that migrate on startup
 
 Some apps, such as Keycloak and many Spring Boot apps with Flyway or
@@ -299,7 +322,7 @@ Check the following yourself before trusting a result:
 
 ## Stacks not tested yet
 
-The following stacks haven't been tested: Laravel, Prisma, Sequelize, and
-Entity Framework. migcheck doesn't depend on the framework, so the general
+The following stacks haven't been tested: Prisma, Sequelize, and Entity
+Framework. migcheck doesn't depend on the framework, so the general
 steps above apply, but expect setup problems like the ones these recipes
 describe.

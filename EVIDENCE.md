@@ -3,7 +3,7 @@
 These results come from running migcheck against real upgrades of open-source
 apps. Each run used the app's own test suite as the workload. The Akkoma results
 reflect migcheck 0.2.1 with the comment fix listed under Unreleased in the
-changelog. The n8n and Lemmy results reflect migcheck 0.2.1, and the others
+changelog. The BookStack results reflect the same version. The n8n and Lemmy results reflect migcheck 0.2.1, and the others
 reflect migcheck 0.2.0. When a release changes how migcheck records or replays
 queries, the affected results are rerun.
 
@@ -17,6 +17,7 @@ queries, the affected results are rerun.
 | n8n | TypeORM (Node) | Postgres | 2 | Caught the 1 break, with 1 false alarm |
 | Lemmy | Diesel (Rust) | Postgres | 2 | Caught the 1 break |
 | Akkoma | Ecto (Elixir) | Postgres | 2 | Caught all 4 breaks |
+| BookStack | Laravel (PHP) | MySQL | 4 | Caught all 4 breaks |
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
@@ -219,3 +220,37 @@ schemas. migcheck now skips comments.
 Each run passed about 4,150 tests, and 1 test failed in each. The first run of
 v3.18.1's tests under migcheck had 96 failures, which didn't happen again
 with the same random seed.
+
+## BookStack
+
+migcheck replayed BookStack's PHPUnit tests on MySQL for four upgrades. Each
+workload ran BookStack's seeder, then its tests.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| v24.02.3 to v24.05.4 | 56,572 | Fail |
+| v25.07.3 to v25.11.6 | 60,536 | Fail |
+| v25.11.6 to v25.12.9 | 65,319 | Pass |
+| v26.05.5 to v26.09.2 | 75,951 | Pass |
+
+migcheck caught the one break in v24.05.4, in 890 statements. v24.05.4
+renames `activities.entity_id` and `activities.entity_type`, which v24.02.3
+writes and filters on.
+
+migcheck caught all three breaks in v25.11.6, in 16,298 statements:
+
+- v25.11.6 merges the `books`, `chapters`, `pages`, and `bookshelves` tables
+  into one `entities` table and drops the old tables.
+- v25.11.6 renames `comments.entity_id` and `comments.entity_type`.
+- v25.11.6 drops `comments.text`, which v25.07.3 writes.
+
+v25.11.6 also drops two `role_permissions` columns that v25.07.3 doesn't
+use, so they aren't breaks.
+
+v25.12.9's migrations add two tables and an index, so migcheck passed it.
+v26.09.2 has no migrations of its own: BookStack backported its only one to
+v26.05.3. migcheck passed it and noted that the schema didn't change.
+
+No statement failed on both schemas in any run. The tests ran in a PHP 8.3
+image. In two runs, one or two image thumbnail tests failed because of the
+image's GD build. The other tests passed.

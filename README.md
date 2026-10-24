@@ -62,7 +62,7 @@ Run migcheck on the database you deploy to. The same query can pass on one
 database and fail on another.
 
 migcheck has been tested against real upgrades of Django, Rails, Go, Node,
-Java, Rust, and Elixir apps. For the results, see [EVIDENCE.md](EVIDENCE.md).
+Java, Rust, Elixir, and PHP apps. For the results, see [EVIDENCE.md](EVIDENCE.md).
 
 ## Install
 
@@ -111,8 +111,8 @@ migcheck --base v1.4.0 --head main \
   --workload "pytest"
 ```
 
-For Rails, SQLAlchemy, Go, Node, Rust, Elixir, and apps that migrate on
-startup, and for apps that don't read `DATABASE_URL`, see
+For Rails, SQLAlchemy, Go, Node, Rust, Elixir, Laravel, and apps that
+migrate on startup, and for apps that don't read `DATABASE_URL`, see
 [RECIPES.md](RECIPES.md).
 
 migcheck exits with one of the following codes:

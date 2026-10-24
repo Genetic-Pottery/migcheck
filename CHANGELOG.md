@@ -12,6 +12,8 @@
 - `EVIDENCE.md` includes the Lemmy test.
 - `RECIPES.md` shows how to set up migcheck for Ecto, and `EVIDENCE.md`
   includes the Akkoma test.
+- `RECIPES.md` shows how to set up migcheck for Laravel, and `EVIDENCE.md`
+  includes the BookStack test on MySQL.
 
 ### Changed
 

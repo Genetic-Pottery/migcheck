@@ -114,6 +114,31 @@ class PostgresReplayTest(unittest.TestCase):
         ], migration="SELECT 1;")
         self.assertEqual(results[1], ("23505", 'duplicate key value violates unique constraint "users_email_key"'))
 
+    def test_labels_keys_after_a_rolled_back_block(self):
+        # Test runners often roll back the first transaction.
+        results = self.replay([
+            Statement("SELECT 1", 0, False),
+            Statement("INSERT INTO users (email) VALUES ('seeded')", 1, True),
+        ], migration="INSERT INTO users (email) VALUES ('seeded');")
+        self.assertTrue(results[1][1].endswith(MIGRATED_KEY))
+
+    def test_labels_keys_after_a_session_reset(self):
+        results = self.replay([
+            Statement("RESET ALL", 0, True),
+            Statement("INSERT INTO users (email) VALUES ('seeded')", 1, True),
+        ], migration="INSERT INTO users (email) VALUES ('seeded');")
+        self.assertTrue(results[1][1].endswith(MIGRATED_KEY))
+
+    def test_session_resets_undo_the_apps_role(self):
+        # A pool resets each connection that the app returns, so one
+        # session's role doesn't carry over to the next.
+        results = self.replay([
+            Statement("SET ROLE replay_tenant", 0, True),
+            Statement("SET SESSION AUTHORIZATION DEFAULT; RESET ALL", 0, True),
+            Statement("INSERT INTO users (email) VALUES ('after')", 1, True),
+        ], setup="DO $$ BEGIN CREATE ROLE replay_tenant; EXCEPTION WHEN duplicate_object THEN NULL; END $$;")
+        self.assertEqual(results, [OK, OK, OK])
+
     def test_checking_a_key_leaves_no_rows(self):
         # The second row collides. Checking it runs the insert again, and the
         # first row of that run must not stay.

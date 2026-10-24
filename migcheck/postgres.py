@@ -43,12 +43,11 @@ TXN_CONTROL = re.compile(
 # Schema changes come from test runners building their database, not from the
 # app's runtime queries.
 DDL = re.compile(r"^\s*(CREATE|ALTER|DROP|COMMENT|GRANT|REVOKE)\b", re.IGNORECASE)
-# Connection pools, such as Npgsql's, reset a connection's session when the
-# app returns it. A reset changes nothing that replay checks, and RESET ALL
-# would clear the settings that replay itself uses.
-POOL_RESET = re.compile(
-    r"^\s*(DISCARD|RESET\s+ALL|SET\s+SESSION\s+AUTHORIZATION\s+DEFAULT|UNLISTEN)\b", re.IGNORECASE
-)
+# Connection pools, such as Npgsql's, send DISCARD ALL to reset a connection
+# that the app returns. It can't run in a transaction, so replay runs the
+# parts that undo the app's role and settings.
+DISCARD_ALL = re.compile(r"^\s*DISCARD\s+ALL\s*;?\s*$", re.IGNORECASE)
+SESSION_RESET = "SET SESSION AUTHORIZATION DEFAULT; RESET ALL"
 # Test runners empty tables between tests by name. On the new schema a listed
 # table can be gone, or a new table can reference one and block the TRUNCATE.
 # Either way the tables stay full and every later test collides with old rows,
@@ -63,12 +62,14 @@ STATEMENT = re.compile(r"^(?:statement|execute [^:]+): (.*)$", re.DOTALL)
 # string. An unterminated string or comment runs to the end.
 SQL_TOKEN = re.compile(
     r"""--[^\n]*"""
-    r"""|(?<![\w$])[Ee]'(?:\\.|''|[^'\\])*(?:'|\Z)"""
+    r"""|[Ee]'(?:\\.|''|[^'\\])*(?:'|\Z)"""
     r"""|'(?:''|[^'])*(?:'|\Z)"""
     r"""|"(?:""|[^"])*(?:"|\Z)"""
-    r"""|(?<![\w$])\$(?P<tag>(?:[A-Za-z_]\w*)?)\$.*?(?:\$(?P=tag)\$|\Z)"""
-    r"""|(?<![\w$])\$(?P<param>\d+)"""
-    r"""|[^-'"$/Ee]+|.""",
+    r"""|\$(?P<tag>(?:[^\W\d]\w*)?)\$.*?(?:\$(?P=tag)\$|\Z)"""
+    r"""|\$(?P<param>\d+)"""
+    # Keywords and identifiers, which can hold $ but don't start a string.
+    r"""|[^\W\d][\w$]*"""
+    r"""|\d+|[^-'"$/\w]+|.""",
     re.DOTALL,
 )
 PARAM = re.compile(r"\$(\d+) = ('(?:[^']|'')*'|NULL)")
@@ -130,12 +131,16 @@ END
 $f$ LANGUAGE plpgsql;
 
 -- Runs a statement that failed on the unique index idx again, and returns
--- whether it collides there with a row the head migrations wrote. The run
--- always rolls back.
-CREATE FUNCTION _migcheck.migrated_key(stmt text, row_ids text, idx text) RETURNS bool AS $f$
+-- whether it collides there with a row the head migrations wrote: one written
+-- after the mark migrated_after and before replay_start. The run always rolls
+-- back.
+CREATE FUNCTION _migcheck.migrated_key(stmt text, row_ids text, idx text, migrated_after bigint, replay_start bigint) RETURNS bool AS $f$
 DECLARE
   hint text := '';
 BEGIN
+  -- Set for this check only. Replayed statements can reset session settings.
+  PERFORM set_config('migcheck.migrated_after', migrated_after::text, true);
+  PERFORM set_config('migcheck.replay_start', replay_start::text, true);
   PERFORM set_config('migcheck.ids', row_ids, true);
   PERFORM set_config('migcheck.pos', '0', true);
   PERFORM set_config('migcheck.probe', idx, true);
@@ -363,8 +368,12 @@ DECLARE
   st text;
   msg text;
   idx text;
+  -- Read once, before any replayed statement can reset the session settings
+  -- or a rolled-back block can undo them.
+  migrated_after bigint := current_setting('migcheck.migrated_after')::bigint;
+  migrated_note text := current_setting('migcheck.migrated_key');
+  replay_start bigint := txid_current() % 4294967296;
 BEGIN
-  PERFORM set_config('migcheck.replay_start', (txid_current() % 4294967296)::text, false);
   FOR b IN SELECT block, bool_and(keep) AS keep FROM _migcheck.stmt GROUP BY block ORDER BY block LOOP
     -- Deferred constraints (Django's foreign keys, for example) would
     -- otherwise fail the whole block at commit instead of failing the
@@ -380,9 +389,9 @@ BEGIN
         msgs := array_append(msgs, NULL::text);
       EXCEPTION WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE, msg = MESSAGE_TEXT, idx = CONSTRAINT_NAME;
-        IF st = '23505' AND coalesce(nullif(current_setting('migcheck.migrated_after', true), ''), '-1')::bigint >= 0
-           AND _migcheck.migrated_key(s.sql, s.row_ids, idx) THEN
-          msg := msg || current_setting('migcheck.migrated_key');
+        IF st = '23505' AND migrated_after >= 0
+           AND _migcheck.migrated_key(s.sql, s.row_ids, idx, migrated_after, replay_start) THEN
+          msg := msg || migrated_note;
         END IF;
         ids := array_append(ids, s.id);
         states := array_append(states, st);
@@ -445,11 +454,13 @@ def parse_log(log, exclude):
             block = open_blocks.pop(session, None)
             if block:
                 block[0] = bool(TXN_COMMIT.match(sql))
-        if not sql or TXN_CONTROL.match(sql) or DDL.match(sql) or POOL_RESET.match(sql):
+        if not sql or TXN_CONTROL.match(sql) or DDL.match(sql):
             continue
         if row[COL_DETAIL].lower().startswith("parameters: "):
             params = {int(n): v for n, v in PARAM.findall(row[COL_DETAIL])}
             sql = _inline_params(sql, params)
+        if DISCARD_ALL.match(sql):
+            sql = SESSION_RESET
         if truncate := TRUNCATE.match(sql):
             sql = _lenient_truncate(truncate)
         last[session] = [sql, []]

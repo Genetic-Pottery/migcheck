@@ -37,12 +37,13 @@
 - On Postgres, filling in parameters takes time in proportion to the
   statement's length. It took time in proportion to the square of the length,
   which slowed bulk inserts with thousands of parameters.
-- On Postgres, replay drops the statements that connection pools, such as
-  Npgsql's, send to reset a connection: `DISCARD`, `RESET ALL`,
-  `SET SESSION AUTHORIZATION DEFAULT`, and `UNLISTEN`. `DISCARD ALL` failed
-  on both schemas and made up to 46% of the statements in a run, so the
-  report warned that migcheck hadn't checked them. `RESET ALL` cleared
-  replay's own settings and could stop the replay.
+- On Postgres, replay runs `DISCARD ALL` as `SET SESSION AUTHORIZATION
+  DEFAULT; RESET ALL`. Connection pools, such as Npgsql's, send `DISCARD ALL`
+  when the app returns a connection, and it can't run in a transaction. It
+  failed on both schemas and made up to 46% of the statements in a run, so
+  the report warned that migcheck hadn't checked them.
+- On Postgres, a session reset or a rolled-back first transaction no longer
+  turns off the note on keys that a head migration inserted.
 
 ## v0.2.1 - 2026-10-23
 

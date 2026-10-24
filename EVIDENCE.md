@@ -295,7 +295,8 @@ v2026.2.1 already includes v2026.3.0's migration that drops
 This test found a gap in migcheck. Npgsql sends `DISCARD ALL` each time the
 app returns a connection to the pool. Those statements failed on both
 schemas and made up 34% to 46% of each run, so the report warned that
-migcheck hadn't checked them. migcheck now drops them. The results didn't
+migcheck hadn't checked them. migcheck now runs the parts of `DISCARD ALL`
+that work in a transaction, which reset the session. The results didn't
 change.
 
 In v2026.9.2's runs, one test failed with a serialization error. It fails

@@ -131,15 +131,20 @@ class ParseLogTest(unittest.TestCase):
         ), exclude=set())
         self.assertEqual(blocks(statements), [(True, ["SELECT 1"])])
 
-    def test_drops_connection_pool_resets(self):
+    def test_rewrites_discard_all(self):
+        # DISCARD ALL can't run in a transaction. Replay keeps the parts that
+        # can, so a pooled connection's reset still undoes the app's role and
+        # settings.
         statements = parse_log(log(
-            ("app", "a", "statement: SELECT 1"),
             ("app", "a", "statement: DISCARD ALL"),
             ("app", "a", "statement: discard temp;"),
             ("app", "a", "statement: RESET ALL"),
-            ("app", "a", "statement: SET SESSION AUTHORIZATION DEFAULT;RESET ALL;UNLISTEN *"),
         ), exclude=set())
-        self.assertEqual(blocks(statements), [(True, ["SELECT 1"])])
+        self.assertEqual([s.sql for s in statements], [
+            "SET SESSION AUTHORIZATION DEFAULT; RESET ALL",
+            "discard temp;",
+            "RESET ALL",
+        ])
 
     def test_commit_prepared_does_not_end_the_transaction(self):
         statements = parse_log(log(
@@ -185,6 +190,12 @@ class InlineParamsTest(unittest.TestCase):
     def test_escape_strings(self):
         sql = r"SELECT E'it\'s -- $1', e'\\', $1"
         self.assertEqual(_inline_params(sql, {1: "'x'"}), r"SELECT E'it\'s -- $1', e'\\', 'x'")
+
+    def test_non_ascii_dollar_quote_tags(self):
+        self.assertEqual(_inline_params("SELECT $é$ -- $é$, $1", {1: "9"}), "SELECT $é$ -- $é$, 9")
+
+    def test_placeholder_right_after_a_dollar_quote(self):
+        self.assertEqual(_inline_params("SELECT $a$x$a$$1", {1: "9"}), "SELECT $a$x$a$9")
 
     def test_dollar_signs_in_identifiers(self):
         self.assertEqual(_inline_params("SELECT col$1, $1", {1: "'x'"}), "SELECT col$1, 'x'")

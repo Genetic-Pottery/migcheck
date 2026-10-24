@@ -1,12 +1,12 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. The Akkoma and
-BookStack results reflect migcheck 0.2.1 with the comment fix listed under
-Unreleased in the changelog. The Bitwarden, Cal.com, and Outline results
-also include the `DISCARD` fix listed there. The n8n and Lemmy results reflect migcheck 0.2.1, and the
-others reflect migcheck 0.2.0. When a release changes how migcheck records or
-replays queries, the affected results are rerun.
+apps. Each run used the app's own test suite as the workload. The n8n and
+Lemmy results reflect migcheck 0.2.1, and the Plane, Gitea, Ghost, Keycloak,
+and Mastodon results reflect migcheck 0.2.0. The other results reflect the
+changes listed under Unreleased in the changelog, as they stood when each app
+ran. When a release changes how migcheck records or replays queries, the
+affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
 |---|---|---|---|---|

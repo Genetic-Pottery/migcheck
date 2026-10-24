@@ -256,10 +256,12 @@ migcheck --base v3.0.0 --head main \
   --workload "mix test"
 ```
 
-- Ecto reads its connection from the repo's config. Separate settings, such
-  as `hostname` and `database`, take precedence over `url`. Split
-  `DATABASE_URL` into each setting, in a file the test config imports. Akkoma
-  imports `config/test.secret.exs` when it exists.
+- Ecto reads its connection from the repo's config, and a `url` setting
+  overrides the separate settings, such as `hostname` and `database`. Check
+  the repo's `init/2` callback too. Akkoma's sets `url` from the
+  `DATABASE_URL` variable, so a command that runs in a container must pass
+  that variable in. Without it, `url` is empty and the separate settings
+  apply.
 - Ecto's SQL sandbox works with replay. Each test's statements replay in one
   transaction that rolls back, as they do in the test. Replay ignores
   savepoints, so a test that rolls back to a savepoint keeps those rows in
@@ -297,15 +299,17 @@ Tested with BookStack on MySQL, whose commands ran in a PHP 8.3 image.
 
 ```sh
 migcheck --base v1.0.0 --head main \
-  --migrate 'dotnet tool restore && dotnet ef database update --connection "$CONN"' \
-  --workload "dotnet test"
+  --migrate "./with-conn.sh dotnet tool restore && ./with-conn.sh dotnet ef database update" \
+  --workload "./with-conn.sh dotnet test"
 ```
 
-- EF Core providers take a connection string, not a URL. Wrap the commands
-  in a script that converts `DATABASE_URL` and sets `CONN`, as described in
+- EF Core providers take a connection string, not a URL. `with-conn.sh`
+  stands for a script that converts `DATABASE_URL` and passes the result in
+  the setting your app reads, as described in
   [Apps that don't read DATABASE_URL](#apps-that-dont-read-database_url).
   For Npgsql, the form is
-  `Host=...;Port=...;Username=...;Password=...;Database=...`.
+  `Host=...;Port=...;Username=...;Password=...;Database=...`. To set it for
+  `dotnet ef database update`, pass `--connection`.
 - Run tests that use the real database. Tests that use SQLite in memory, or
   EF Core's in-memory provider, send no queries to the server. Bitwarden's
   `Infrastructure.IntegrationTest` project reads its databases from

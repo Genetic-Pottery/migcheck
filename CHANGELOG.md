@@ -16,6 +16,8 @@
   includes the BookStack test on MySQL.
 - `RECIPES.md` shows how to set up migcheck for Entity Framework, and
   `EVIDENCE.md` includes the Bitwarden test.
+- `RECIPES.md` shows how to set up migcheck for Prisma, and `EVIDENCE.md`
+  includes the Cal.com test.
 
 ### Changed
 

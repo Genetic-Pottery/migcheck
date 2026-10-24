@@ -185,6 +185,29 @@ migcheck --base v2.0.0 --head main \
 Tested with n8n, which reads separate `DB_POSTGRESDB_*` variables, so its
 commands ran inside a wrapper like the one above.
 
+## Node with Prisma
+
+```sh
+migcheck --base v1.0.0 --head main \
+  --migrate "npm ci && npx prisma migrate deploy" \
+  --workload "npx prisma db seed && npm test"
+```
+
+- Use `prisma migrate deploy`, which applies existing migrations. `prisma
+  migrate dev` can reset the database and create migrations.
+- Seed the database in the workload, not in the migrate command. migcheck
+  runs the migrate command a second time on a database that holds the first
+  run's rows, so a seed there runs twice.
+- Prisma fills `@default(uuid())`, `@default(cuid())`, and `@updatedAt` in
+  the client, not in the database. A column with one of these and no
+  database default breaks the old release once it's NOT NULL, because the
+  old client doesn't send it. migcheck catches this when the workload
+  inserts rows.
+- Prisma's Rust query engine and its driver adapters, such as
+  `@prisma/adapter-pg`, both work with replay.
+
+Tested with Cal.com on both query engines.
+
 ## Rust with Diesel
 
 ```sh
@@ -346,6 +369,6 @@ Check the following yourself before trusting a result:
 
 ## Stacks not tested yet
 
-The following stacks haven't been tested: Prisma and Sequelize. migcheck
-doesn't depend on the framework, so the general steps above apply, but
-expect setup problems like the ones these recipes describe.
+Sequelize hasn't been tested. migcheck doesn't depend on the framework, so the
+general steps above apply, but expect setup problems like the ones these
+recipes describe.

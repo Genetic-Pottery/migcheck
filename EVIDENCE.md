@@ -3,8 +3,8 @@
 These results come from running migcheck against real upgrades of open-source
 apps. Each run used the app's own test suite as the workload. The Akkoma and
 BookStack results reflect migcheck 0.2.1 with the comment fix listed under
-Unreleased in the changelog. The Bitwarden results also include the `DISCARD`
-fix listed there. The n8n and Lemmy results reflect migcheck 0.2.1, and the
+Unreleased in the changelog. The Bitwarden and Cal.com results also include
+the `DISCARD` fix listed there. The n8n and Lemmy results reflect migcheck 0.2.1, and the
 others reflect migcheck 0.2.0. When a release changes how migcheck records or
 replays queries, the affected results are rerun.
 
@@ -20,6 +20,7 @@ replays queries, the affected results are rerun.
 | Akkoma | Ecto (Elixir) | Postgres | 2 | Caught all 4 breaks |
 | BookStack | Laravel (PHP) | MySQL | 4 | Caught all 4 breaks |
 | Bitwarden | Entity Framework (.NET) | Postgres | 4 | Caught all 5 breaks |
+| Cal.com | Prisma (Node) | Postgres | 3 | Caught 1 of 2 breaks |
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
@@ -299,3 +300,34 @@ change.
 In v2026.9.2's runs, one test failed with a serialization error. It fails
 about half the time without migcheck too. The tests ran in the .NET SDK image
 that each release's `global.json` names.
+
+## Cal.com
+
+migcheck replayed Cal.com's integration tests on Postgres for three upgrades.
+Each workload ran Cal.com's seed script, then the tests. v5.6.20 and v5.7.12
+run Prisma's Rust query engine. v5.8.14 runs Prisma's TypeScript client with
+the `@prisma/adapter-pg` driver adapter, which sends queries through node-pg.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| v5.6.20 to v5.7.12 | 9,381 | Pass |
+| v5.7.12 to v5.8.14 | 9,630 | Fail |
+| v5.8.14 to v5.9.15 | 10,246 | Pass |
+
+migcheck caught the break in v5.8.14, in 247 statements. v5.8.14 adds
+`users.uuid`, fills it, and makes it NOT NULL, all in one release. The
+database has no default for the column. Prisma's `@default(uuid())` generates
+the value in v5.8.14's client, and v5.7.12's client doesn't know the column.
+Every user that v5.7.12 creates breaks.
+
+migcheck missed a break in v5.7.12. v5.7.12 drops `Watchlist.severity` and
+other `Watchlist` columns, and v5.6.20's watchlist checks filter on
+`severity`. v5.6.20's integration tests and seed script never reach those
+checks, so the run had no queries to replay. This finding comes from reading
+the code, not from a run.
+
+v5.9.15's migrations add tables, change column types in the tables they
+add, and drop NOT NULL constraints, so migcheck passed it.
+
+All integration tests passed in each run. The commands ran in a Node 20
+image.

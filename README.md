@@ -61,8 +61,8 @@ from the database. The migration looks safe, but the old release's inserts fail.
 Run migcheck on the database you deploy to. The same query can pass on one
 database and fail on another.
 
-migcheck has been tested against real upgrades of Django, Rails, Go, Node, and
-Java apps. For the results, see [EVIDENCE.md](EVIDENCE.md).
+migcheck has been tested against real upgrades of Django, Rails, Go, Node,
+Java, and Rust apps. For the results, see [EVIDENCE.md](EVIDENCE.md).
 
 ## Install
 
@@ -111,8 +111,8 @@ migcheck --base v1.4.0 --head main \
   --workload "pytest"
 ```
 
-For Rails, SQLAlchemy, Go, Node, and apps that migrate on startup, and for
-apps that don't read `DATABASE_URL`, see [RECIPES.md](RECIPES.md).
+For Rails, SQLAlchemy, Go, Node, Rust, and apps that migrate on startup, and
+for apps that don't read `DATABASE_URL`, see [RECIPES.md](RECIPES.md).
 
 migcheck exits with one of the following codes:
 

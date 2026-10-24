@@ -1,8 +1,8 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. The n8n results
-reflect migcheck 0.2.1, and the others reflect migcheck 0.2.0. When a release changes how migcheck records or replays
+apps. Each run used the app's own test suite as the workload. The n8n and Lemmy
+results reflect migcheck 0.2.1, and the others reflect migcheck 0.2.0. When a release changes how migcheck records or replays
 queries, the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
@@ -13,6 +13,7 @@ queries, the affected results are rerun.
 | Keycloak | Hibernate (Java) | Postgres, MySQL | 2 | Caught all 3 breaks |
 | Mastodon | Active Record (Rails) | Postgres | 2 | Passed both, as designed |
 | n8n | TypeORM (Node) | Postgres | 2 | Caught the 1 break, with 1 false alarm |
+| Lemmy | Diesel (Rust) | Postgres | 2 | Caught the 1 break |
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
@@ -146,3 +147,32 @@ the old release checks for the row first.
 
 Each run passed about 7,000 to 8,600 tests. 4 tests failed in each run, at
 least 2 of them because `openssl` wasn't installed.
+
+## Lemmy
+
+migcheck replayed Lemmy's Rust tests on Postgres for two upgrades,
+1.0.0-beta.0 to 1.0.0-beta.1 and 1.0.0-beta.1 to 1.0.0-beta.2.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| 1.0.0-beta.0 to 1.0.0-beta.1 | 20,673 | Fail |
+| 1.0.0-beta.1 to 1.0.0-beta.2 | 21,562 | Pass |
+
+migcheck caught the one break in 1.0.0-beta.1. That release renames
+`local_user.hide_media` to `hide_posts_with_media`. Diesel names every column
+in its queries, so 445 of 1.0.0-beta.0's statements break: inserts and
+updates of `local_user`, and the reads that join it, such as the post and
+comment views.
+
+1.0.0-beta.2 renames a column too, but the column is new in that release, so
+1.0.0-beta.1 never uses it. migcheck passed it.
+
+Lemmy sets `lemmy.protocol_and_hostname` as an option in its connection
+string, and its triggers read the setting. The Postgres log doesn't record
+connection options, so in the first runs, replay ran without the setting. 1,685
+statements failed on both schemas and weren't checked. The runs in the table
+set the option on the `postgres` role, and 60 statements failed on both
+schemas. The verdicts didn't change.
+
+Each run passed 270 to 280 tests. 2 tests failed in each run, because they
+fetch pages from the internet.

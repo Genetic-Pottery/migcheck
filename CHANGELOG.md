@@ -7,6 +7,9 @@
 - `RECIPES.md` shows how to set up migcheck for TypeORM, tested with n8n.
 - `EVIDENCE.md` includes the n8n test, which found a false alarm when a
   migration inserts rows that the old release inserts only if they're missing.
+- `RECIPES.md` shows how to set up migcheck for Diesel, tested with Lemmy, and
+  how to give replay the settings an app passes in its connection string.
+- `EVIDENCE.md` includes the Lemmy test.
 
 ### Changed
 

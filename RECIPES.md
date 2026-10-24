@@ -185,6 +185,27 @@ migcheck --base v2.0.0 --head main \
 Tested with n8n, which reads separate `DB_POSTGRESDB_*` variables, so its
 commands ran inside a wrapper like the one above.
 
+## Rust with Diesel
+
+```sh
+migcheck --base v1.0.0 --head main \
+  --migrate "diesel migration run" \
+  --workload "cargo test"
+```
+
+- Diesel's CLI reads `DATABASE_URL`. If your app embeds its migrations, run
+  the binary that applies them instead. Lemmy's migrate script ran
+  `cargo run --package lemmy_diesel_utils --features full`.
+- Set `CARGO_TARGET_DIR` to a directory outside the checkout. migcheck checks
+  out each release fresh, so without it, each run compiles everything twice.
+- If your app has git submodules, run `git submodule update --init` in each
+  command. A fresh checkout doesn't include them.
+- If your tests share one database, they run against `DATABASE_URL`
+  directly. Lemmy's tests run one at a time with `#[serial]`.
+
+Tested with Lemmy, which reads `LEMMY_DATABASE_URL`, so its scripts set it from
+`DATABASE_URL`.
+
 ## Apps that migrate on startup
 
 Some apps, such as Keycloak and many Spring Boot apps with Flyway or
@@ -244,6 +265,12 @@ Check the following yourself before trusting a result:
   the statements that fail on both schemas. Errors from your test suite's own
   setup are normal. Errors that point to missing data mean replay lost rows
   that later queries needed.
+- **Connection options.** The Postgres log doesn't record options set in the
+  connection string, such as `options=-c name=value`. Replay runs without
+  them, so statements that read them fail on both schemas with
+  `unrecognized configuration parameter`. To give replay the values, set
+  them on the role in the migrate command:
+  `ALTER ROLE postgres SET name = 'value'`.
 - **The migrations that ran.** If the result reports breaks from migrations
   you meant to skip, log the migrate command's output and check which
   migrations it applied.
@@ -251,6 +278,6 @@ Check the following yourself before trusting a result:
 ## Stacks not tested yet
 
 The following stacks haven't been tested: Laravel, Prisma, Sequelize, Entity
-Framework, Ecto, and Diesel. migcheck doesn't depend on the framework, so the
-general steps above apply, but expect setup problems like the ones these
-recipes describe.
+Framework, and Ecto. migcheck doesn't depend on the framework, so the general
+steps above apply, but expect setup problems like the ones these recipes
+describe.

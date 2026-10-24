@@ -31,12 +31,18 @@
 ### Fixed
 
 - On Postgres, an apostrophe in an SQL comment, such as "won't", no longer
-  stops migcheck from filling in the statement's later parameters. Those
-  statements failed on both schemas and weren't checked.
-- On Postgres, replay drops `DISCARD` statements, which connection pools such
-  as Npgsql's send when the app returns a connection. They failed on both
-  schemas and made up to 46% of the statements in a run, so the report warned
-  that migcheck hadn't checked them.
+  stops migcheck from filling in the statement's later parameters. Neither
+  does a backslash-escaped quote in an `E''` string. Those statements failed
+  on both schemas and weren't checked.
+- On Postgres, filling in parameters takes time in proportion to the
+  statement's length. It took time in proportion to the square of the length,
+  which slowed bulk inserts with thousands of parameters.
+- On Postgres, replay drops the statements that connection pools, such as
+  Npgsql's, send to reset a connection: `DISCARD`, `RESET ALL`,
+  `SET SESSION AUTHORIZATION DEFAULT`, and `UNLISTEN`. `DISCARD ALL` failed
+  on both schemas and made up to 46% of the statements in a run, so the
+  report warned that migcheck hadn't checked them. `RESET ALL` cleared
+  replay's own settings and could stop the replay.
 
 ## v0.2.1 - 2026-10-23
 

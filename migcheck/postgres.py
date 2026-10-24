@@ -44,9 +44,11 @@ TXN_CONTROL = re.compile(
 # app's runtime queries.
 DDL = re.compile(r"^\s*(CREATE|ALTER|DROP|COMMENT|GRANT|REVOKE)\b", re.IGNORECASE)
 # Connection pools, such as Npgsql's, reset a connection's session when the
-# app returns it. DISCARD can't run inside replay's transactions, so replay
-# drops it.
-DISCARD = re.compile(r"^\s*DISCARD\b", re.IGNORECASE)
+# app returns it. A reset changes nothing that replay checks, and RESET ALL
+# would clear the settings that replay itself uses.
+POOL_RESET = re.compile(
+    r"^\s*(DISCARD|RESET\s+ALL|SET\s+SESSION\s+AUTHORIZATION\s+DEFAULT|UNLISTEN)\b", re.IGNORECASE
+)
 # Test runners empty tables between tests by name. On the new schema a listed
 # table can be gone, or a new table can reference one and block the TRUNCATE.
 # Either way the tables stay full and every later test collides with old rows,
@@ -56,6 +58,19 @@ TRUNCATE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 STATEMENT = re.compile(r"^(?:statement|execute [^:]+): (.*)$", re.DOTALL)
+# One token of a statement, for finding the placeholders outside quoted text
+# and comments. A quote inside a comment, such as "won't", doesn't start a
+# string. An unterminated string or comment runs to the end.
+SQL_TOKEN = re.compile(
+    r"""--[^\n]*"""
+    r"""|(?<![\w$])[Ee]'(?:\\.|''|[^'\\])*(?:'|\Z)"""
+    r"""|'(?:''|[^'])*(?:'|\Z)"""
+    r"""|"(?:""|[^"])*(?:"|\Z)"""
+    r"""|(?<![\w$])\$(?P<tag>(?:[A-Za-z_]\w*)?)\$.*?(?:\$(?P=tag)\$|\Z)"""
+    r"""|(?<![\w$])\$(?P<param>\d+)"""
+    r"""|[^-'"$/Ee]+|.""",
+    re.DOTALL,
+)
 PARAM = re.compile(r"\$(\d+) = ('(?:[^']|'')*'|NULL)")
 ROW_ID = "migcheck-id "
 
@@ -365,7 +380,7 @@ BEGIN
         msgs := array_append(msgs, NULL::text);
       EXCEPTION WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE, msg = MESSAGE_TEXT, idx = CONSTRAINT_NAME;
-        IF st = '23505' AND current_setting('migcheck.migrated_after')::bigint >= 0
+        IF st = '23505' AND coalesce(nullif(current_setting('migcheck.migrated_after', true), ''), '-1')::bigint >= 0
            AND _migcheck.migrated_key(s.sql, s.row_ids, idx) THEN
           msg := msg || current_setting('migcheck.migrated_key');
         END IF;
@@ -430,7 +445,7 @@ def parse_log(log, exclude):
             block = open_blocks.pop(session, None)
             if block:
                 block[0] = bool(TXN_COMMIT.match(sql))
-        if not sql or TXN_CONTROL.match(sql) or DDL.match(sql) or DISCARD.match(sql):
+        if not sql or TXN_CONTROL.match(sql) or DDL.match(sql) or POOL_RESET.match(sql):
             continue
         if row[COL_DETAIL].lower().startswith("parameters: "):
             params = {int(n): v for n, v in PARAM.findall(row[COL_DETAIL])}
@@ -468,16 +483,8 @@ def _inline_params(sql, params):
     out = []
     i = 0
     while i < len(sql):
-        c = sql[i]
-        # A quote inside a comment, such as "won't", doesn't start a string.
-        if sql.startswith("--", i):
-            end = sql.find("\n", i)
-            end = len(sql) if end == -1 else end
-            out.append(sql[i:end])
-            i = end
-            continue
         if sql.startswith("/*", i):
-            # Postgres nests block comments.
+            # Postgres nests block comments, which a regex can't match.
             depth, end = 1, i + 2
             while end < len(sql) and depth:
                 if sql.startswith("/*", end):
@@ -489,24 +496,11 @@ def _inline_params(sql, params):
             out.append(sql[i:end])
             i = end
             continue
-        if c in "'\"":
-            end = i + 1
-            while end < len(sql):
-                if sql[end] == c:
-                    if end + 1 < len(sql) and sql[end + 1] == c:
-                        end += 2
-                        continue
-                    break
-                end += 1
-            out.append(sql[i:end + 1])
-            i = end + 1
-            continue
-        m = re.match(r"\$(\d+)", sql[i:])
-        if m and int(m.group(1)) in params:
-            out.append(params[int(m.group(1))])
-            i += len(m.group(0))
-            continue
-        out.append(c)
-        i += 1
+        m = SQL_TOKEN.match(sql, i)
+        if m.group("param") and int(m.group("param")) in params:
+            out.append(params[int(m.group("param"))])
+        else:
+            out.append(m.group(0))
+        i = m.end()
     return "".join(out)
 

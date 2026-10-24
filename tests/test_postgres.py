@@ -136,6 +136,8 @@ class ParseLogTest(unittest.TestCase):
             ("app", "a", "statement: SELECT 1"),
             ("app", "a", "statement: DISCARD ALL"),
             ("app", "a", "statement: discard temp;"),
+            ("app", "a", "statement: RESET ALL"),
+            ("app", "a", "statement: SET SESSION AUTHORIZATION DEFAULT;RESET ALL;UNLISTEN *"),
         ), exclude=set())
         self.assertEqual(blocks(statements), [(True, ["SELECT 1"])])
 
@@ -174,6 +176,28 @@ class InlineParamsTest(unittest.TestCase):
     def test_nested_block_comments(self):
         sql = "SELECT /* a /* b' */ c' */ $1"
         self.assertEqual(_inline_params(sql, {1: "'x'"}), "SELECT /* a /* b' */ c' */ 'x'")
+
+
+    def test_dollar_quoted_text(self):
+        sql = "SELECT $$ /* $1 $$, $tag$ -- it's $tag$, $1"
+        self.assertEqual(_inline_params(sql, {1: "'x'"}), "SELECT $$ /* $1 $$, $tag$ -- it's $tag$, 'x'")
+
+    def test_escape_strings(self):
+        sql = r"SELECT E'it\'s -- $1', e'\\', $1"
+        self.assertEqual(_inline_params(sql, {1: "'x'"}), r"SELECT E'it\'s -- $1', e'\\', 'x'")
+
+    def test_dollar_signs_in_identifiers(self):
+        self.assertEqual(_inline_params("SELECT col$1, $1", {1: "'x'"}), "SELECT col$1, 'x'")
+
+    def test_unterminated_string_runs_to_the_end(self):
+        self.assertEqual(_inline_params("SELECT $1, 'a $1", {1: "'x'"}), "SELECT 'x', 'a $1")
+
+    def test_long_statements(self):
+        # Bulk inserts can carry thousands of placeholders.
+        n = 20000
+        sql = "INSERT INTO t VALUES " + ", ".join(f"(${i})" for i in range(1, n + 1))
+        out = _inline_params(sql, {i: "1" for i in range(1, n + 1)})
+        self.assertEqual(out, "INSERT INTO t VALUES " + ", ".join("(1)" for _ in range(n)))
 
 
 class LenientTruncateTest(unittest.TestCase):

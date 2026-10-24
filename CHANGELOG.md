@@ -18,6 +18,8 @@
   `EVIDENCE.md` includes the Bitwarden test.
 - `RECIPES.md` shows how to set up migcheck for Prisma, and `EVIDENCE.md`
   includes the Cal.com test.
+- `RECIPES.md` shows how to set up migcheck for Sequelize, and `EVIDENCE.md`
+  includes the Outline test.
 
 ### Changed
 

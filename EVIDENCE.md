@@ -3,8 +3,8 @@
 These results come from running migcheck against real upgrades of open-source
 apps. Each run used the app's own test suite as the workload. The Akkoma and
 BookStack results reflect migcheck 0.2.1 with the comment fix listed under
-Unreleased in the changelog. The Bitwarden and Cal.com results also include
-the `DISCARD` fix listed there. The n8n and Lemmy results reflect migcheck 0.2.1, and the
+Unreleased in the changelog. The Bitwarden, Cal.com, and Outline results
+also include the `DISCARD` fix listed there. The n8n and Lemmy results reflect migcheck 0.2.1, and the
 others reflect migcheck 0.2.0. When a release changes how migcheck records or
 replays queries, the affected results are rerun.
 
@@ -21,6 +21,7 @@ replays queries, the affected results are rerun.
 | BookStack | Laravel (PHP) | MySQL | 4 | Caught all 4 breaks |
 | Bitwarden | Entity Framework (.NET) | Postgres | 4 | Caught all 5 breaks |
 | Cal.com | Prisma (Node) | Postgres | 3 | Caught 1 of 2 breaks |
+| Outline | Sequelize (Node) | Postgres | 3 | Caught the 1 break |
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
@@ -331,3 +332,32 @@ add, and drop NOT NULL constraints, so migcheck passed it.
 
 All integration tests passed in each run. The commands ran in a Node 20
 image.
+
+## Outline
+
+migcheck replayed Outline's server tests on Postgres for three upgrades, with
+eight test workers.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| v1.7.1 to v1.8.0 | 40,773 | Fail |
+| v1.8.1 to v1.9.0 | 43,763 | Pass |
+| v1.11.0 to v1.12.0 | 61,748 | Pass |
+
+migcheck caught the one break in v1.8.0, in 24 statements. v1.8.0 replaces
+the unique index on `document_insights ("documentId", date)` with one that
+adds `period`. v1.7.1's insight rollup upserts with `ON CONFLICT
+("documentId", date)`, which needs the old index. The break changes no column
+or table.
+
+v1.9.0 drops `teams.collaborativeEditing`, which v1.8.1's model no longer
+declares, so migcheck passed it. v1.12.0 replaces the migrations up to v1.3.0
+with one baseline migration that does nothing on an existing database.
+migcheck passed it too.
+
+Outline's popularity task creates a working table, then fills and reads it.
+Replay drops DDL, so the task's other statements failed on both schemas. They
+were 36 to 54 statements per run, most of the statements that migcheck
+skipped.
+
+All server tests passed in each run.

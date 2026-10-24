@@ -143,6 +143,25 @@ migcheck --db mysql --base v6.69.0 --head v6.70.0 \
 
 Tested with Ghost on MySQL, with one test worker and with four.
 
+## Node with Sequelize
+
+```sh
+migcheck --base v1.0.0 --head main \
+  --migrate "yarn install && yarn sequelize db:migrate" \
+  --workload "yarn test"
+```
+
+- With `use_env_variable: "DATABASE_URL"` in the Sequelize config, the
+  migrations and the app both read `DATABASE_URL`.
+- If the app loads a `.env` file, check that it doesn't override the
+  `DATABASE_URL` that migcheck sets. dotenv and dotenvx don't override
+  variables that are already set, unless you ask them to.
+- If app code creates tables at runtime, for example as working tables,
+  replay drops those statements, so later statements on those tables fail
+  on both schemas.
+
+Tested with Outline, with eight test workers.
+
 ## Node with TypeORM
 
 ```sh
@@ -367,8 +386,8 @@ Check the following yourself before trusting a result:
   you meant to skip, log the migrate command's output and check which
   migrations it applied.
 
-## Stacks not tested yet
+## Other stacks
 
-Sequelize hasn't been tested. migcheck doesn't depend on the framework, so the
-general steps above apply, but expect setup problems like the ones these
-recipes describe.
+For a stack without a recipe, the general steps above apply. migcheck doesn't
+depend on the framework, but expect setup problems like the ones these recipes
+describe.

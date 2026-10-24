@@ -18,6 +18,12 @@
   the base release checks for the row before inserting it, which replay can't
   see. The result still fails.
 
+### Fixed
+
+- On Postgres, an apostrophe in an SQL comment, such as "won't", no longer
+  stops migcheck from filling in the statement's later parameters. Those
+  statements failed on both schemas and weren't checked.
+
 ## v0.2.1 - 2026-10-23
 
 ### Added

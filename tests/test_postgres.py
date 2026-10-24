@@ -155,6 +155,18 @@ class InlineParamsTest(unittest.TestCase):
     def test_leaves_unknown_placeholders(self):
         self.assertEqual(_inline_params("SELECT $2", {1: "'x'"}), "SELECT $2")
 
+    def test_quotes_in_comments_dont_start_a_string(self):
+        # Akkoma's activity queries carry a comment like this one.
+        sql = "SELECT $1 -- friends won't see $1\n, $2 /* it's $2 */ LIMIT $3"
+        self.assertEqual(
+            _inline_params(sql, {1: "'a'", 2: "'b'", 3: "20"}),
+            "SELECT 'a' -- friends won't see $1\n, 'b' /* it's $2 */ LIMIT 20",
+        )
+
+    def test_nested_block_comments(self):
+        sql = "SELECT /* a /* b' */ c' */ $1"
+        self.assertEqual(_inline_params(sql, {1: "'x'"}), "SELECT /* a /* b' */ c' */ 'x'")
+
 
 class LenientTruncateTest(unittest.TestCase):
     def rewrite(self, sql):

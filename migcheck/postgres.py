@@ -459,11 +459,32 @@ def _lenient_truncate(match):
 
 
 def _inline_params(sql, params):
-    """Replaces $N placeholders with logged literals, skipping quoted text."""
+    """Replaces $N placeholders with logged literals, skipping quoted text and
+    comments."""
     out = []
     i = 0
     while i < len(sql):
         c = sql[i]
+        # A quote inside a comment, such as "won't", doesn't start a string.
+        if sql.startswith("--", i):
+            end = sql.find("\n", i)
+            end = len(sql) if end == -1 else end
+            out.append(sql[i:end])
+            i = end
+            continue
+        if sql.startswith("/*", i):
+            # Postgres nests block comments.
+            depth, end = 1, i + 2
+            while end < len(sql) and depth:
+                if sql.startswith("/*", end):
+                    depth, end = depth + 1, end + 2
+                elif sql.startswith("*/", end):
+                    depth, end = depth - 1, end + 2
+                else:
+                    end += 1
+            out.append(sql[i:end])
+            i = end
+            continue
         if c in "'\"":
             end = i + 1
             while end < len(sql):

@@ -43,6 +43,10 @@ TXN_CONTROL = re.compile(
 # Schema changes come from test runners building their database, not from the
 # app's runtime queries.
 DDL = re.compile(r"^\s*(CREATE|ALTER|DROP|COMMENT|GRANT|REVOKE)\b", re.IGNORECASE)
+# Connection pools, such as Npgsql's, reset a connection's session when the
+# app returns it. DISCARD can't run inside replay's transactions, so replay
+# drops it.
+DISCARD = re.compile(r"^\s*DISCARD\b", re.IGNORECASE)
 # Test runners empty tables between tests by name. On the new schema a listed
 # table can be gone, or a new table can reference one and block the TRUNCATE.
 # Either way the tables stay full and every later test collides with old rows,
@@ -426,7 +430,7 @@ def parse_log(log, exclude):
             block = open_blocks.pop(session, None)
             if block:
                 block[0] = bool(TXN_COMMIT.match(sql))
-        if not sql or TXN_CONTROL.match(sql) or DDL.match(sql):
+        if not sql or TXN_CONTROL.match(sql) or DDL.match(sql) or DISCARD.match(sql):
             continue
         if row[COL_DETAIL].lower().startswith("parameters: "):
             params = {int(n): v for n, v in PARAM.findall(row[COL_DETAIL])}

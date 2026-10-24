@@ -131,6 +131,14 @@ class ParseLogTest(unittest.TestCase):
         ), exclude=set())
         self.assertEqual(blocks(statements), [(True, ["SELECT 1"])])
 
+    def test_drops_connection_pool_resets(self):
+        statements = parse_log(log(
+            ("app", "a", "statement: SELECT 1"),
+            ("app", "a", "statement: DISCARD ALL"),
+            ("app", "a", "statement: discard temp;"),
+        ), exclude=set())
+        self.assertEqual(blocks(statements), [(True, ["SELECT 1"])])
+
     def test_commit_prepared_does_not_end_the_transaction(self):
         statements = parse_log(log(
             ("app", "a", "statement: BEGIN"),

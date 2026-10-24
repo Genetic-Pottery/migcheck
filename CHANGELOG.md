@@ -27,6 +27,10 @@
 - On Postgres, an apostrophe in an SQL comment, such as "won't", no longer
   stops migcheck from filling in the statement's later parameters. Those
   statements failed on both schemas and weren't checked.
+- On Postgres, replay drops `DISCARD` statements, which connection pools such
+  as Npgsql's send when the app returns a connection. They failed on both
+  schemas and made up to 46% of the statements in a run, so the report warned
+  that migcheck hadn't checked them.
 
 ## v0.2.1 - 2026-10-23
 

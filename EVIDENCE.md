@@ -1,12 +1,14 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. The n8n and
-Lemmy results reflect migcheck 0.2.1, and the Plane, Gitea, Ghost, Keycloak,
-and Mastodon results reflect migcheck 0.2.0. The other results reflect the
-changes listed under Unreleased in the changelog, as they stood when each app
-ran. When a release changes how migcheck records or replays queries, the
-affected results are rerun.
+apps. Each run used the app's own test suite as the workload. The Plane and
+Ghost results, and the Gitea and Keycloak results on MySQL, reflect migcheck
+0.2.0. The n8n and Lemmy results reflect migcheck 0.2.1. The other results
+reflect the changes listed under Unreleased in the changelog, as they stood
+when each app ran. The Gitea, Keycloak, and Mastodon runs on Postgres were
+rerun with those changes and gave the same verdicts as with 0.2.0. When a
+release changes how migcheck records or replays queries, the affected results
+are rerun.
 
 | App | ORM | Database | Upgrades | Result |
 |---|---|---|---|---|
@@ -100,9 +102,9 @@ replayed v4.6.9 to v4.7.3 with all migrations applied.
 
 | Upgrade | Migrations | Statements | Result |
 |---|---|---|---|
-| v4.5.19 to v4.6.9 | Pre-deployment | 215,330 | Pass |
-| v4.6.9 to v4.7.3 | Pre-deployment | 237,781 | Pass |
-| v4.6.9 to v4.7.3 | All | 237,583 | Fail |
+| v4.5.19 to v4.6.9 | Pre-deployment | 213,180 | Pass |
+| v4.6.9 to v4.7.3 | Pre-deployment | 237,257 | Pass |
+| v4.6.9 to v4.7.3 | All | 234,771 | Fail |
 
 Both pre-deployment runs passed, as Mastodon's design intends. The run with
 all migrations failed on two post-deployment changes:

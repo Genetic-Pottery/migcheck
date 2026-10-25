@@ -43,6 +43,28 @@ v1 fails during a rolling deploy of v2-rename, and after a rollback to v1.
 
 migcheck supports Postgres and MySQL. It's an early release.
 
+## Tested with
+
+migcheck has caught breaking migrations in real upgrades of the following
+apps, using each app's own test suite. For the results, see
+[EVIDENCE.md](EVIDENCE.md). For setup steps by framework, see
+[RECIPES.md](RECIPES.md).
+
+| Framework | Language | Database | App |
+|---|---|---|---|
+| Django | Python | Postgres | Plane |
+| Active Record (Rails) | Ruby | Postgres | Mastodon |
+| xorm | Go | Postgres, MySQL | Gitea |
+| Hibernate | Java | Postgres, MySQL | Keycloak |
+| Knex | Node | MySQL | Ghost |
+| TypeORM | Node | Postgres | n8n |
+| Prisma | Node | Postgres | Cal.com |
+| Sequelize | Node | Postgres | Outline |
+| Diesel | Rust | Postgres | Lemmy |
+| Ecto | Elixir | Postgres | Akkoma |
+| Laravel | PHP | MySQL | BookStack |
+| Entity Framework | .NET | Postgres | Bitwarden |
+
 ## What it catches
 
 migcheck catches any change that makes the old release's queries fail,
@@ -60,10 +82,6 @@ from the database. The migration looks safe, but the old release's inserts fail.
 
 Run migcheck on the database you deploy to. The same query can pass on one
 database and fail on another.
-
-migcheck has been tested against real upgrades of Django, Rails, Go, Node,
-Java, Rust, Elixir, PHP, and .NET apps. For the results, see
-[EVIDENCE.md](EVIDENCE.md).
 
 ## Install
 

@@ -282,9 +282,10 @@ migcheck caught both breaks in v2026.7.2, in 23 statements. v2026.7.2 drops
 
 migcheck caught all three breaks in v2026.10.0, in 278 statements.
 v2026.10.0 renames `AccessRequest.Status`, `AccessRequest.ResolvedDate`, and
-`AccessLease.Status`. Postgres reports only the first missing column in a
-statement. The statements that use `AccessRequest.Status` also use
-`ResolvedDate`, so the report lists them under `ResolvedDate`.
+`AccessLease.Status`. The report lists each one as a separate cause. Postgres
+reports only the first missing column in a statement, so a statement that
+uses both of `AccessRequest`'s renamed columns counts under the one Postgres
+reports, which is usually `ResolvedDate`.
 
 v2026.5.0 and v2026.6.2 add tables, indexes, and columns with defaults, so
 migcheck passed them. v2026.6.2 also makes `Send.Key` and `Send.Data` NOT

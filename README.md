@@ -27,15 +27,15 @@ For example, this is migcheck's output for the
 `v2-rename` renames a column that `v1` uses:
 
 ```
-FAIL: 4 statements from v1 break after v2-rename's migrations.
+FAIL: 4 statements from v1 break after v2-rename's migrations, from 1 cause:
+    users.name  4 statements
 
-  [42703] column "name" of relation "users" does not exist
-      2 statements in 1 transactions. Examples:
+  users.name
+      [42703] column "name" of relation "users" does not exist (2)
+      [42703] column "name" does not exist (2)
+      4 statements in 1 transactions. Examples:
       INSERT INTO users (name, email) VALUES ('Ada O''Brien', 'ada@example.com') RETURNING id
       UPDATE users SET name = 'Ada Lovelace' WHERE id = '1'
-
-  [42703] column "name" does not exist
-      2 statements in 1 transactions. Examples:
       SELECT id, name, email FROM users WHERE id = '1'
 
 v1 fails during a rolling deploy of v2-rename, and after a rollback to v1.
@@ -279,6 +279,11 @@ transaction, as test runners do after each test, replay rolls back its effects
 too. The report lists the first failure in each transaction as a root cause and
 groups later integrity errors in that transaction separately.
 
+The report groups root causes by the table, column, or function that each
+error names. Databases word one missing column differently in reads and writes,
+and a read's error names the query's alias for the table, not the table. To
+find the table, migcheck looks up the alias in the statement.
+
 migcheck also accounts for how test runners use the database:
 
 - It records queries from every database the workload touches, because test
@@ -314,8 +319,10 @@ and migcheck removes the container and worktrees when it finishes.
   keys then fail on both schemas, and migcheck skips them.
 - migcheck supports MySQL 8.0 and later. It doesn't support MariaDB, whose
   query log has a different format.
-- Postgres words some errors differently for reads and writes, so one missing
-  column can appear as two root causes.
+- If migcheck can't tell which table a column error refers to, the error
+  stays a cause of its own. This happens when a statement reads from a
+  subquery or a function, or when an error names neither the table nor an
+  alias.
 
 ## Run the tests
 

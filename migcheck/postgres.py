@@ -12,7 +12,7 @@ import subprocess
 import time
 import uuid
 
-from .common import MIGRATED_KEY, Statement
+from .common import MIGRATED_KEY, Statement, column_owner
 from .common import run as _run
 
 DEFAULT_IMAGE = "postgres:17-alpine"
@@ -56,6 +56,13 @@ TRUNCATE = re.compile(
     r"^\s*TRUNCATE\s+(?:TABLE\s+)?(.*?)(\s+(?:RESTART|CONTINUE|CASCADE|RESTRICT)\b.*)?;?\s*$",
     re.IGNORECASE | re.DOTALL,
 )
+# Errors that name the schema object a statement used, so the report can
+# group a dropped column's errors together however each statement named it.
+COLUMN_OF = re.compile(r'^(?:column|null value in column) "(.+?)" of relation "(.+?)" ')
+QUALIFIED_COLUMN = re.compile(r'^column ((?:"(?:[^"]|"")+"|[^".\s]+))\.(.+) does not exist$')
+COLUMN = re.compile(r'^column "(.+)" does not exist$')
+RELATION = re.compile(r'^relation "(?:.+\.)?(.+)" does not exist$')
+FUNCTION = re.compile(r'^function (?:[\w$]+\.)?([\w$]+)\(.*\) does not exist$')
 STATEMENT = re.compile(r"^(?:statement|execute [^:]+): (.*)$", re.DOTALL)
 # One token of a statement, for finding the placeholders outside quoted text
 # and comments. A quote inside a comment, such as "won't", doesn't start a
@@ -281,6 +288,24 @@ class Postgres:
     def record(self):
         """Starts recording statements. Postgres logs every statement from
         the start, so this does nothing."""
+
+    @staticmethod
+    def cause(msg, sql):
+        """Returns the table, column, or function that an error says is
+        missing or changed, such as "users.name", or None."""
+        if m := COLUMN_OF.match(msg):
+            return f"{m.group(2)}.{m.group(1)}"
+        if m := QUALIFIED_COLUMN.match(msg):
+            table, column = column_owner(sql, m.group(1), fold=True), m.group(2).strip('"')
+            return table and f"{table}.{column}"
+        if m := COLUMN.match(msg):
+            table = column_owner(sql, None, fold=True)
+            return table and f"{table}.{m.group(1)}"
+        if m := RELATION.match(msg):
+            return m.group(1)
+        if m := FUNCTION.match(msg):
+            return f"{m.group(1)}()"
+        return None
 
     @staticmethod
     def is_integrity_error(state):

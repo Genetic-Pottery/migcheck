@@ -23,6 +23,12 @@
 
 ### Changed
 
+- The report groups breaking statements by the table, column, or function
+  that each error names, such as `users.name`, and starts with a list of
+  these causes and how many statements each one breaks. Before, one dropped
+  column could appear as several groups, because a read's error names the
+  query's alias for the table, and writes word the error differently. Errors
+  that name nothing migcheck can resolve stay groups of their own.
 - On Postgres, when an insert breaks because a row from the head release's
   migrations holds its key, the report says so. The insert isn't a break if
   the base release checks for the row before inserting it, which replay can't

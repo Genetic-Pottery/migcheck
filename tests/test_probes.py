@@ -84,6 +84,40 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual([(f.probe.name, f.probe.kind, f.others) for f in results],
                          [("users.plan", "new column requires a value", [("bio", "column no longer accepts NULL")])])
 
+    def test_sets_a_foreign_key_made_required_through_its_parent(self):
+        posts = [col("id", notnull=True, default=True), col("team_id")]
+        fks = {"public.posts": [{"table": "public.posts", "ref": "public.users",
+                                 "columns": ["team_id"], "ref_columns": ["id"]}]}
+        old = catalog({"users": USERS, "posts": ("r", posts)}, fks)
+        new = catalog({"users": USERS, "posts": ("r", [posts[0], col("team_id", notnull=True),
+                                                       col("plan", "text", notnull=True)])}, fks)
+        found, _ = probes.generate(old, new, Dialect)
+        self.assertEqual(found[0].statements, [
+            """WITH p0 AS (INSERT INTO "public"."users" ("name") VALUES ((md5(random()::text))::text) RETURNING "id") """
+            """INSERT INTO "public"."posts" ("team_id") SELECT p0."id" FROM p0"""
+        ])
+
+    def test_leaves_out_columns_it_cant_make_a_value_for(self):
+        old = catalog({"users": ("r", [*USERS[1], col("geo", "geometry")])})
+        new = catalog({"users": ("r", [*USERS[1], col("geo", "geometry", notnull=True), col("plan", "text", notnull=True)])})
+        found, skipped = probes.generate(old, new, Dialect)
+        self.assertEqual(skipped, [])
+        self.assertEqual([p.name for p in found], ["users.plan"])
+
+    def test_a_parent_tables_own_probe_names_its_failure(self):
+        posts = [col("id", notnull=True, default=True), col("user_id", notnull=True)]
+        fks = {"public.posts": [{"table": "public.posts", "ref": "public.users",
+                                 "columns": ["user_id"], "ref_columns": ["id"]}]}
+        old = catalog({"users": USERS, "posts": ("r", posts)}, fks)
+        new = catalog({"users": ("r", [*USERS[1], col("plan", "text", notnull=True)]),
+                       "posts": ("r", [*posts, col("plan", "text", notnull=True)])}, fks)
+        found, _ = probes.generate(old, new, Dialect)
+        self.assertEqual([p.name for p in found], ["users.plan", "posts.plan"])
+        error = ("23502", 'null value in column "plan" of relation "users" violates not-null constraint')
+        # Both probes fail on users.plan: the posts probe in its parent row.
+        results, _ = probes.findings(list(reversed(found)), [(None, None)] * 2, [error, error], set(), Postgres.cause)
+        self.assertEqual([(f.probe.name, f.probe.kind) for f in results], [("users.plan", "new column requires a value")])
+
     def test_skips_references_to_tables_the_catalog_leaves_out(self):
         tables = {"events": ("r", [col("id", notnull=True, default=True), col("part_id", notnull=True)])}
         fks = {"public.events": [{"table": "public.events", "ref": "public.parts_1",
@@ -251,6 +285,18 @@ class MySQLDialectTest(unittest.TestCase):
             "INSERT INTO `teams` (`code`) VALUES (@mc0_0)",
             "INSERT INTO `members` (`team_code`) VALUES (@mc1_0)",
         ])
+
+    def test_skips_parent_keys_the_database_generates(self):
+        from migcheck.mysql import Dialect as MyDialect
+
+        tables = {"teams": ("r", [col("code", "char(8)", notnull=True)]),
+                  "members": ("r", [col("team_code", "char(8)", notnull=True)])}
+        tables["teams"][1][0][1]["generated"] = True
+        fks = {".members": [{"table": ".members", "ref": ".teams", "columns": ["team_code"], "ref_columns": ["code"]}]}
+        cat = catalog(tables, fks)
+        cat["relations"] = {f".{k.split('.', 1)[1]}": {**v, "schema": ""} for k, v in cat["relations"].items()}
+        with self.assertRaisesRegex(probes.ProbeError, "parent key teams.code is generated"):
+            probes.plan(cat, ".members", MyDialect)
 
     def test_literals(self):
         from migcheck.mysql import Dialect as MyDialect

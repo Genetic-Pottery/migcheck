@@ -273,7 +273,11 @@ LIMITED_TEXT = re.compile(r"^(character varying|character)\((\d+)\)$")
 class Dialect:
     """Writes probe SQL for Postgres."""
 
-    returning = True  # An insert can return the keys a default filled.
+    @staticmethod
+    def reads_back(column):
+        """Whether an insert can read back a value the database filled in
+        `column`. RETURNING reads back any column."""
+        return True
 
     @staticmethod
     def ident(name):

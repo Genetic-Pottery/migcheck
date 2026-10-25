@@ -85,7 +85,8 @@ def generate(old, new, dialect):
                 # only a column that every such insert leaves out can fail.
                 # With none of those, the probe leaves the columns out.
                 certain = [c for c, kind in kinds.items() if kind != NOT_NULL]
-                set_too = [c for c, kind in kinds.items() if kind == NOT_NULL] if certain else []
+                set_too = [c for c, kind in kinds.items() if kind == NOT_NULL and _can_set(old, key, c, dialect)]
+                set_too = set_too if certain else []
                 first = (certain or list(kinds))[0]
                 try:
                     statements = dialect.insert(plan(old, key, dialect, set_too))
@@ -115,6 +116,21 @@ def _change(old_col):
     if old_col is None:
         return NEW_COLUMN
     return NO_DEFAULT if old_col["notnull"] else NOT_NULL
+
+
+def _can_set(catalog, key, column, dialect):
+    """Whether an insert probe can give `column` a value: through its foreign
+    key's parent row, or with a literal of its type."""
+    if any(column in fk["columns"] for fk in catalog["fks"].get(key, [])):
+        return True
+    return dialect.literal(catalog["relations"][key]["columns"][column]["type"], catalog) is not None
+
+
+def _literal(dialect, info, column, catalog):
+    literal = dialect.literal(info["type"], catalog)
+    if literal is None:
+        raise ProbeError(f"migcheck can't make a value of type {info['type']} for {column}")
+    return literal
 
 
 def _requires_value(col):
@@ -154,7 +170,9 @@ def _plan(catalog, key, dialect, rows, path, also=frozenset()):
     rel = catalog["relations"][key]
     values = {}
     for fk in catalog["fks"].get(key, []):
-        if not all(_requires_value(rel["columns"][c]) for c in fk["columns"]):
+        # A foreign key the insert sets needs its parent row, so a column in
+        # `also` gets one too.
+        if not all(_requires_value(rel["columns"][c]) or c in also for c in fk["columns"]):
             continue
         parent = _plan(catalog, fk["ref"], dialect, rows, (*path, key))
         parent_cols = catalog["relations"][fk["ref"]]["columns"]
@@ -162,19 +180,13 @@ def _plan(catalog, key, dialect, rows, path, also=frozenset()):
             values[c] = ("ref", parent, ref)
             if ref not in rows[parent].returning:
                 rows[parent].returning.append(ref)
-            # Without RETURNING, a key that a default fills can't be read
-            # back, except an auto-increment key, so the parent sets it.
-            if not dialect.returning and ref not in rows[parent].values and not parent_cols[ref]["identity"]:
-                literal = dialect.literal(parent_cols[ref]["type"], catalog)
-                if literal is None:
-                    raise ProbeError(f"migcheck can't make a value of type {parent_cols[ref]['type']} for {ref}")
-                rows[parent].values[ref] = ("literal", literal)
+            if ref not in rows[parent].values and not dialect.reads_back(parent_cols[ref]):
+                if parent_cols[ref]["generated"]:
+                    raise ProbeError(f"its parent key {short(fk['ref'])}.{ref} is generated, and can't be read back")
+                rows[parent].values[ref] = ("literal", _literal(dialect, parent_cols[ref], ref, catalog))
     for c, info in rel["columns"].items():
         if c not in values and (_requires_value(info) or c in also):
-            literal = dialect.literal(info["type"], catalog)
-            if literal is None:
-                raise ProbeError(f"migcheck can't make a value of type {info['type']} for {c}")
-            values[c] = ("literal", literal)
+            values[c] = ("literal", _literal(dialect, info, c, catalog))
     rows.append(Row(rel["schema"], rel["name"], values))
     return len(rows) - 1
 
@@ -193,6 +205,10 @@ def findings(probes, old, new, known, cause):
     Findings for names in `known`, the causes replay already found, are left
     out, because replay shows those breaks with the workload's own queries."""
     found, unchecked, seen = [], [], set(known)
+    # An insert probe can fail in a parent row's table, which has a probe of
+    # its own when it changed too. Those failures come last, so the parent
+    # table's own probe names the finding.
+    direct, indirect = [], []
     pos = 0
     for p in probes:
         n = len(p.statements)
@@ -204,16 +220,23 @@ def findings(probes, old, new, known, cause):
             continue
         failed = next(((sql, st, msg) for sql, (st, msg) in zip(p.statements, new_results) if st is not None), None)
         if failed:
-            sql, state, msg = failed
-            resolved = cause(msg, sql)
-            name = resolved or p.name
+            resolved = cause(failed[2], failed[0])
             what = subject(resolved) if resolved else p.subject
-            column = what[1] if p.kinds else None
-            if name not in seen:
-                seen.add(name)
-                others = [(c, k) for c, k in p.kinds.items() if c != column]
-                probe = Probe(name, p.kinds.get(column, p.kind), p.statements, what, p.kinds)
-                found.append(Finding(probe, state, msg, sql=sql, others=others))
+            same_table = not p.kinds or not resolved or what[0] == p.subject[0]
+            (direct if same_table else indirect).append((p, failed, resolved, what))
+    for p, (sql, state, msg), resolved, what in direct + indirect:
+        name = resolved or p.name
+        if name in seen:
+            continue
+        seen.add(name)
+        if p.kinds and what[0] == p.subject[0]:
+            kind = p.kinds.get(what[1], p.kind)
+            others = [(c, k) for c, k in p.kinds.items() if c != what[1]]
+        elif p.kinds:
+            kind, others = f"insert into a parent row of {p.subject[0]} fails", []
+        else:
+            kind, others = p.kind, []
+        found.append(Finding(Probe(name, kind, p.statements, what, p.kinds), state, msg, sql=sql, others=others))
     return found, unchecked
 
 

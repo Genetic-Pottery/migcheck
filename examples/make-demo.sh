@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds a demo git repo with one base release and three candidate releases:
-#   v1          users table with a name column
+# Builds a demo git repo with one base release and four candidate releases:
+#   v1          users table with name and nickname columns
 #   v2-rename   renames name to full_name (breaks v1)
 #   v2-notnull  adds a NOT NULL column without a default (breaks v1 inserts)
 #   v2-expand   adds full_name next to name (safe)

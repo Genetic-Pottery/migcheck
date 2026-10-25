@@ -102,9 +102,12 @@ ENUM = re.compile(r"^enum\('((?:[^']|'')*)'", re.IGNORECASE)
 class Dialect:
     """Writes probe SQL for MySQL."""
 
-    # An insert can't return the keys a default filled, except an
-    # auto-increment key through LAST_INSERT_ID().
-    returning = False
+    @staticmethod
+    def reads_back(column):
+        """Whether an insert can read back a value the database filled in
+        `column`. MySQL has no RETURNING, so only LAST_INSERT_ID() reads an
+        auto-increment key back."""
+        return column["identity"]
 
     @staticmethod
     def ident(name):

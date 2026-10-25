@@ -105,8 +105,7 @@ def main():
         new = db.replay("mc_new", replayed, migrated_after)
         old, old_probes = old[:len(statements)], old[len(statements):]
         new, new_probes = new[:len(statements)], new[len(statements):]
-        roots, knock_on = _classify(db, statements, old, new)
-        groups = _group(db, roots)
+        roots, knock_on, groups = classify(db, statements, old, new)
         found, failed_on_old = probes.findings(
             probe_list, old_probes, new_probes, {cause for cause, _ in groups if cause}, db.cause
         )
@@ -154,11 +153,7 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None, 
             f"all {skipped} statements fail on {base}'s own schema, so there is nothing to compare. "
             f"First error: [{old[0][0]}] {old[0][1]}"
         )
-    if classified:
-        roots, knock_on, groups = classified
-    else:
-        roots, knock_on = _classify(db, statements, old, new)
-        groups = _group(db, roots)
+    roots, knock_on, groups = classified or classify(db, statements, old, new)
     count = sum(len(v) for v in roots.values())
     causes = f"{len(groups)} cause{'s' if len(groups) != 1 else ''}"
     checked = len(statements) - skipped
@@ -414,6 +409,12 @@ def _classify(db, statements, old, new):
         broken_blocks.add(s.block)
         roots[key].append(s)
     return roots, knock_on
+
+
+def classify(db, statements, old, new):
+    """Returns (roots, knock_on, groups) for the replay results."""
+    roots, knock_on = _classify(db, statements, old, new)
+    return roots, knock_on, _group(db, roots)
 
 
 def _group(db, roots):

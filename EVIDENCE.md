@@ -1,14 +1,13 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. The Plane and
-Ghost results, and the Gitea and Keycloak results on MySQL, reflect migcheck
-0.2.0. The n8n and Lemmy results reflect migcheck 0.2.1. The other results
-reflect the changes listed under Unreleased in the changelog, as they stood
-when each app ran. The Gitea, Keycloak, and Mastodon runs on Postgres were
-rerun with those changes and gave the same verdicts as with 0.2.0. When a
-release changes how migcheck records or replays queries, the affected results
-are rerun.
+apps. Each run used the app's own test suite as the workload. The Postgres
+results reflect the changes listed under Unreleased in the changelog. The
+MySQL results for Ghost, Gitea, and Keycloak reflect migcheck 0.2.0, because
+migcheck's MySQL replay hasn't changed since then. The BookStack results
+reflect the Unreleased changes. Rerunning the older Postgres results with the
+Unreleased changes gave the same verdicts. When a release changes how
+migcheck records or replays queries, the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
 |---|---|---|---|---|
@@ -133,8 +132,8 @@ migcheck replayed n8n's CLI integration tests on Postgres for two upgrades,
 
 | Upgrade | Statements | Result |
 |---|---|---|
-| 2.40.6 to 2.41.7 | 486,841 | Fail |
-| 2.44.6 to 2.45.3 | 602,226 | Pass |
+| 2.40.6 to 2.41.7 | 486,810 | Fail |
+| 2.44.6 to 2.45.3 | 625,107 | Pass |
 
 migcheck caught the one break in 2.41.7. That release adds
 `ai_preference.source` as `NOT NULL` with no default, on purpose, so that every
@@ -165,8 +164,8 @@ migcheck replayed Lemmy's Rust tests on Postgres for two upgrades,
 
 | Upgrade | Statements | Result |
 |---|---|---|
-| 1.0.0-beta.0 to 1.0.0-beta.1 | 20,673 | Fail |
-| 1.0.0-beta.1 to 1.0.0-beta.2 | 21,562 | Pass |
+| 1.0.0-beta.0 to 1.0.0-beta.1 | 20,663 | Fail |
+| 1.0.0-beta.1 to 1.0.0-beta.2 | 21,561 | Pass |
 
 migcheck caught the one break in 1.0.0-beta.1. That release renames
 `local_user.hide_media` to `hide_posts_with_media`. Diesel names every column
@@ -185,7 +184,9 @@ set the option on the `postgres` role, and 60 statements failed on both
 schemas. The verdicts didn't change.
 
 Each run passed 270 to 280 tests. 2 tests failed in each run, because they
-fetch pages from the internet.
+fetch pages from the internet. In one run of 1.0.0-beta.0's tests, 32 tests
+failed on a duplicate person name, and the run recorded fewer statements. The
+table shows the next run, which had the usual 2 failures.
 
 ## Akkoma
 
@@ -194,10 +195,10 @@ v3.19.0 and v3.19.0 to v3.20.1. Akkoma is a fork of Pleroma.
 
 | Upgrade | Statements | Result |
 |---|---|---|
-| v3.18.1 to v3.19.0 | 76,342 | Fail |
-| v3.19.0 to v3.20.1 | 74,256 | Pass |
+| v3.18.1 to v3.19.0 | 76,358 | Fail |
+| v3.19.0 to v3.20.1 | 74,285 | Pass |
 
-migcheck caught all four breaks in v3.19.0, in 21,773 statements:
+migcheck caught all four breaks in v3.19.0, in 21,781 statements:
 
 - v3.19.0 drops `users.skip_thread_containment`. Ecto names every field in
   its queries, so most of v3.18.1's reads and writes of `users` break.
@@ -223,7 +224,7 @@ This test found a bug in migcheck. One of Akkoma's queries has a comment with
 left the query's later parameters unfilled, so the query failed on both
 schemas. migcheck now skips comments.
 
-Each run passed about 4,150 tests, and 1 test failed in each. The first run of
+Each run passed about 4,150 tests, and 1 to 3 tests failed in each. The first run of
 v3.18.1's tests under migcheck had 96 failures, which didn't happen again
 with the same random seed.
 
@@ -270,16 +271,16 @@ other tests use SQLite in memory, so they can't serve as a workload.
 
 | Upgrade | Statements | Result |
 |---|---|---|
-| v2026.4.2 to v2026.5.0 | 5,680 | Pass |
-| v2026.5.0 to v2026.6.2 | 3,200 | Pass |
-| v2026.6.2 to v2026.7.2 | 3,591 | Fail |
-| v2026.9.2 to v2026.10.0 | 5,888 | Fail |
+| v2026.4.2 to v2026.5.0 | 8,653 | Pass |
+| v2026.5.0 to v2026.6.2 | 5,996 | Pass |
+| v2026.6.2 to v2026.7.2 | 6,750 | Fail |
+| v2026.9.2 to v2026.10.0 | 10,626 | Fail |
 
 migcheck caught both breaks in v2026.7.2, in 23 statements. v2026.7.2 drops
 `OrganizationInviteLink.EncryptedOrgKey` and renames
 `OrganizationInviteLink.EncryptedInviteKey`.
 
-migcheck caught all three breaks in v2026.10.0, in 276 statements.
+migcheck caught all three breaks in v2026.10.0, in 278 statements.
 v2026.10.0 renames `AccessRequest.Status`, `AccessRequest.ResolvedDate`, and
 `AccessLease.Status`. Postgres reports only the first missing column in a
 statement. The statements that use `AccessRequest.Status` also use

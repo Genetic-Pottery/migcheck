@@ -26,8 +26,8 @@ records or replays queries, the affected results are rerun.
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
 
-The schema probes are unreleased. Their results come from the Plane runs and
-from the Postgres upgrades listed in [Schema probes](#schema-probes).
+The schema probes reflect migcheck 0.4.0. Their results come from the Plane
+runs and from the upgrades listed in [Schema probes](#schema-probes).
 
 ## Plane
 

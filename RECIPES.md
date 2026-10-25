@@ -368,7 +368,7 @@ problems itself:
 - If 10% or more of the statements fail on the base schema too, the result
   includes a warning, because migcheck didn't check those statements.
 - If migcheck can't read the schemas to write schema probes, such as on a
-  database version older than Postgres 12 or MySQL 8.0.14, the result
+  Postgres version older than 12, the result
   includes a note and checks only the recorded statements.
 
 Check the following yourself before trusting a result:

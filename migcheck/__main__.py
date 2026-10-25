@@ -93,9 +93,9 @@ def main():
         migrated_after = db.mark()
         _sh(args.migrate, head_dir, db.url("mc_new"))
         schema_changed = db.schema("mc_old") != db.schema("mc_new")
-        probe_list, unchecked = [], []
-        if schema_changed and not args.no_probes and hasattr(db, "catalog"):
-            probe_list, unchecked = probes.generate(db.catalog("mc_old"), db.catalog("mc_new"), db.dialect)
+        probe_list, unchecked, probe_error = [], [], None
+        if schema_changed and not args.no_probes:
+            probe_list, unchecked, probe_error = _generate_probes(db)
 
         step(f"Replaying {len(statements)} statements and {len(probe_list)} schema probes against both schemas")
         # Probes run last, in blocks that roll back, so they don't change
@@ -121,12 +121,27 @@ def main():
 
     sys.exit(report(
         db, args.base, args.head, statements, old, new, workload_exit, args.head_name, schema_changed,
-        found, unchecked, args.fail_on_probes,
+        found, unchecked, args.fail_on_probes, probe_error,
     ))
 
 
+def _generate_probes(db):
+    """Returns (probes, unchecked, error) for the change from mc_old to
+    mc_new. If reading the schemas fails, for example on a database version
+    whose catalog lacks a column the query reads, the run goes on without
+    probes, and the error explains why."""
+    try:
+        return (*probes.generate(db.catalog("mc_old"), db.catalog("mc_new"), db.dialect), None)
+    except Exception as e:
+        # psql and mysql print the error, then the failing SQL, so the first
+        # error line says the most.
+        lines = [line.strip() for line in str(e).splitlines() if line.strip()]
+        error = next((line for line in lines if "ERROR" in line), lines[-1] if lines else "")
+        return [], [], f"{type(e).__name__}: {error}"
+
+
 def report(db, base, head, statements, old, new, workload_exit, head_name=None, schema_changed=True,
-           found=(), unchecked=(), fail_on_probes=False):
+           found=(), unchecked=(), fail_on_probes=False, probe_error=None):
     """Prints the result, writes it as Markdown if requested, and returns the exit code."""
     head_md = head_name or f"`{head}`"
     head = head_name or head
@@ -159,6 +174,9 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None, 
             "outside the recorded queries. The most common errors are listed above."
         )
         notes.append(("Warning", text, text.replace(f"{base}'s", f"`{base}`'s")))
+    if probe_error:
+        text = f"migcheck couldn't generate schema probes, so only the recorded statements were checked. {probe_error}"
+        notes.append(("Note", text, text))
     # A migrate command that silently applies nothing passes every query.
     if not schema_changed:
         text = "{}'s migrations didn't change the schema. If {} adds migrations, check that --migrate applies them to $DATABASE_URL."

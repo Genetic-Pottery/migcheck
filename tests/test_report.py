@@ -13,12 +13,12 @@ OK = (None, None)
 
 
 def run_report(statements, old, new, workload_exit=0, head_name=None, schema_changed=True,
-               found=(), unchecked=(), fail_on_probes=False):
+               found=(), unchecked=(), fail_on_probes=False, probe_error=None):
     """Runs report() and returns (exit code, stdout)."""
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         code = cli.report(Postgres, "v1", "v2", statements, old, new, workload_exit, head_name, schema_changed,
-                          found, unchecked, fail_on_probes)
+                          found, unchecked, fail_on_probes, probe_error)
     return code, out.getvalue()
 
 
@@ -296,3 +296,19 @@ class ProbeReportTest(unittest.TestCase):
         self.assertIn("#### Schema probes: 1 change might break `v1`", md)
         self.assertIn("| `Watchlist.severity` | column dropped | 1 |", md)
         self.assertIn("`v1` mentions `severity` and `Watchlist` in 1 file: `src/watchlist.ts`.", md)
+
+    def test_probe_errors_dont_stop_the_run(self):
+        class OldServer:
+            dialect = None
+
+            def catalog(self, db):
+                raise RuntimeError('psql... failed:\nERROR:  column a.attgenerated does not exist\nLINE 6: ...\n   ^')
+
+        self.assertEqual(cli._generate_probes(OldServer()),
+                         ([], [], "RuntimeError: ERROR:  column a.attgenerated does not exist"))
+        code, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK],
+                               probe_error="RuntimeError: ERROR:  column a.attgenerated does not exist")
+        self.assertEqual(code, 0)
+        self.assertIn("PASS: all 1 statements", out)
+        self.assertIn("Note: migcheck couldn't generate schema probes, so only the recorded statements were "
+                      "checked. RuntimeError: ERROR:  column a.attgenerated does not exist", out)

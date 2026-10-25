@@ -358,7 +358,9 @@ and migcheck removes the container and worktrees when it finishes.
   touch a table, replay can't see it break. Schema probes cover dropped and
   renamed tables, columns, and functions, and required columns. They don't
   cover changes that depend on values, such as a new unique index or a
-  narrower type, or index changes that break an `ON CONFLICT`.
+  narrower type, or index changes that break an `ON CONFLICT`. Probes need
+  Postgres 12 or MySQL 8.0.14 or later. On older versions, migcheck runs
+  without them and says so in the report.
 - migcheck applies migrations to an empty database. A migration that fails or
   locks for a long time on a large production table can pass here.
 - Replay runs one statement at a time. Failures that depend on concurrency

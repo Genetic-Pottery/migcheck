@@ -51,9 +51,11 @@ these results counted only 9 breaking migrations, because it counted `0102`
 and `0110` as safe. The probes showed that they aren't.
 
 The probes also found more breaks in three migrations that replay had caught.
-`0104` makes `rich_filters` required in four more tables, `0113` makes
-`webhooks.version` and `profiles.is_navigation_tour_completed` required, and
-`0117` drops `pages.description` and `draft_issues.description`. The probes
+`0104` makes `rich_filters` required in four more tables. `0113` makes
+`webhooks.version`, `workspace_user_properties.product_tour`, and two
+`profiles` columns required: `is_navigation_tour_completed` and
+`is_subscribed_to_changelog`. `0117` drops `pages.description` and
+`draft_issues.description`. The probes
 flagged nothing in the other 14 migrations. `0099` couldn't run, because
 Plane has two `0098` migrations at that commit.
 

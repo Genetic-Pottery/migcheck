@@ -105,11 +105,14 @@ def main():
         new = db.replay("mc_new", replayed, migrated_after)
         old, old_probes = old[:len(statements)], old[len(statements):]
         new, new_probes = new[:len(statements)], new[len(statements):]
-        roots, _ = _classify(db, statements, old, new)
-        known = {cause for cause, _ in _group(db, roots) if cause}
-        found, failed_on_old = probes.findings(probe_list, old_probes, new_probes, known, db.cause)
+        roots, knock_on = _classify(db, statements, old, new)
+        groups = _group(db, roots)
+        found, failed_on_old = probes.findings(
+            probe_list, old_probes, new_probes, {cause for cause, _ in groups if cause}, db.cause
+        )
         unchecked += failed_on_old
-        probes.search(base_dir, found)
+        if found:
+            probes.search(base_dir, found)
     except Exception as e:  # Exit code 1 means a query breaks, so nothing else may use it.
         fail(f"{type(e).__name__}: {e}")
     finally:
@@ -121,7 +124,7 @@ def main():
 
     sys.exit(report(
         db, args.base, args.head, statements, old, new, workload_exit, args.head_name, schema_changed,
-        found, unchecked, args.fail_on_probes, probe_error,
+        found, unchecked, args.fail_on_probes, probe_error, (roots, knock_on, groups),
     ))
 
 
@@ -141,7 +144,7 @@ def _generate_probes(db):
 
 
 def report(db, base, head, statements, old, new, workload_exit, head_name=None, schema_changed=True,
-           found=(), unchecked=(), fail_on_probes=False, probe_error=None):
+           found=(), unchecked=(), fail_on_probes=False, probe_error=None, classified=None):
     """Prints the result, writes it as Markdown if requested, and returns the exit code."""
     head_md = head_name or f"`{head}`"
     head = head_name or head
@@ -151,8 +154,11 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None, 
             f"all {skipped} statements fail on {base}'s own schema, so there is nothing to compare. "
             f"First error: [{old[0][0]}] {old[0][1]}"
         )
-    roots, knock_on = _classify(db, statements, old, new)
-    groups = _group(db, roots)
+    if classified:
+        roots, knock_on, groups = classified
+    else:
+        roots, knock_on = _classify(db, statements, old, new)
+        groups = _group(db, roots)
     count = sum(len(v) for v in roots.values())
     causes = f"{len(groups)} cause{'s' if len(groups) != 1 else ''}"
     checked = len(statements) - skipped
@@ -304,7 +310,7 @@ def _plural(n, word):
 
 
 def _mention(base, finding, quote="", files=None):
-    table, word = probes.subject(finding.probe.name)
+    table, word = finding.probe.subject or probes.subject(finding.probe.name)
     word = f"{quote}{word}{quote}"
     also = f" and {quote}{table}{quote}" if table else ""
     if not finding.mentions:
@@ -312,6 +318,11 @@ def _mention(base, finding, quote="", files=None):
     shown = files or finding.files
     more = f", and {finding.mentions - len(shown)} more" if finding.mentions > len(shown) else ""
     return f"{base} mentions {word}{also} in {_plural(finding.mentions, 'file')}: {', '.join(shown)}{more}."
+
+
+def _others(finding):
+    listed = ", ".join(f"{column} ({kind})" for column, kind in finding.others)
+    return f"The table has more columns that now need a value: {listed}."
 
 
 PROBES_INTRO = (
@@ -334,6 +345,8 @@ def _print_probes(base, head, found, unchecked, fail_on_probes):
             print(f"  {f.probe.name}")
             print(f"      [{f.state}] {f.msg}")
             print(f"      {(f.sql or f.probe.sql)[:300]}")
+            if f.others:
+                print(f"      {_others(f)}")
             print(f"      {_mention(base, f)}")
             print()
     if unchecked:
@@ -363,6 +376,9 @@ def _markdown_probes(base, head_md, found, unchecked, fail_on_probes):
             md.append("```sql")
             md.append((f.sql or f.probe.sql)[:1000])
             md.append("```")
+            if f.others:
+                md.append(_md_escape(_others(f)))
+                md.append("")
             md.append(_mention(f"`{base}`", f, "`", [f"`{p}`" for p in f.files]))
     if unchecked:
         md.append("")

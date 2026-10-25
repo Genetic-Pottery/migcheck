@@ -233,7 +233,8 @@ COPY (SELECT json_build_object(
     FROM pg_constraint con
     JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
     JOIN pg_class rc ON rc.oid = con.confrelid JOIN pg_namespace rn ON rn.oid = rc.relnamespace
-    WHERE con.contype = 'f' AND {APP_SCHEMAS}),
+    -- A foreign key to a partitioned table also has a row per partition.
+    WHERE con.contype = 'f' AND con.conparentid = 0 AND {APP_SCHEMAS}),
   'functions', (SELECT coalesce(json_agg(json_build_object(
       'schema', n.nspname, 'name', p.proname,
       'args', (SELECT coalesce(json_agg(format_type(t, NULL) ORDER BY i), '[]')
@@ -257,12 +258,13 @@ COPY (SELECT json_build_object(
 LITERALS = {
     "smallint": "(1 + random() * 32000)::int", "integer": "(1 + random() * 2e9)::int",
     "bigint": "(1 + random() * 2e9)::bigint", "numeric": "0", "real": "0", "double precision": "0",
-    "money": "0", "oid": "0", "boolean": "false", "uuid": "gen_random_uuid()", "json": "'{}'",
+    "money": "0", "oid": "0", "boolean": "false", "uuid": "md5(random()::text)::uuid", "json": "'{}'",
     "jsonb": "'{}'", "bytea": "''", "interval": "'1 day'", "inet": "'127.0.0.1'", "cidr": "'127.0.0.1'",
     "macaddr": "'08:00:2b:01:02:03'", "tsvector": "''", "xml": "'<migcheck/>'", "point": "'(0,0)'",
     "date": "now()", "timestamp without time zone": "now()", "timestamp with time zone": "now()",
     "time without time zone": "now()", "time with time zone": "now()",
-    "text": "gen_random_uuid()::text", "citext": "gen_random_uuid()::text", "name": "gen_random_uuid()::text",
+    # gen_random_uuid() is built in only from Postgres 13, and probes run on 12.
+    "text": "md5(random()::text)", "citext": "md5(random()::text)", "name": "md5(random()::text)",
 }
 # Text with a length limit takes that many characters of a random value.
 LIMITED_TEXT = re.compile(r"^(character varying|character)\((\d+)\)$")
@@ -270,6 +272,8 @@ LIMITED_TEXT = re.compile(r"^(character varying|character)\((\d+)\)$")
 
 class Dialect:
     """Writes probe SQL for Postgres."""
+
+    returning = True  # An insert can return the keys a default filled.
 
     @staticmethod
     def ident(name):

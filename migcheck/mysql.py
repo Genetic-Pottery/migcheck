@@ -96,11 +96,15 @@ LITERALS = {
     "tinyblob": "''", "blob": "''", "mediumblob": "''", "longblob": "''", "json": "JSON_OBJECT()", "set": "''",
 }
 SIZED = re.compile(r"^(char|varchar|binary|varbinary)\((\d+)\)")
-ENUM = re.compile(r"^enum\('((?:[^']|'')*)'")
+ENUM = re.compile(r"^enum\('((?:[^']|'')*)'", re.IGNORECASE)
 
 
 class Dialect:
     """Writes probe SQL for MySQL."""
+
+    # An insert can't return the keys a default filled, except an
+    # auto-increment key through LAST_INSERT_ID().
+    returning = False
 
     @staticmethod
     def ident(name):
@@ -117,8 +121,8 @@ class Dialect:
     @staticmethod
     def literal(type_name, catalog):
         t = type_name.lower()
-        if m := ENUM.match(t):
-            return "'" + type_name[6:6 + len(m.group(1))] + "'"
+        if m := ENUM.match(type_name):
+            return f"'{m.group(1)}'"
         if m := SIZED.match(t):
             if m.group(1) in ("binary", "varbinary"):
                 return f"LEFT(UNHEX(MD5(RAND())), {m.group(2)})"
@@ -139,6 +143,8 @@ class Dialect:
             for col, value in row.values.items():
                 if value[0] == "ref":
                     exprs.append(var(value[1], value[2]))
+                    if col in row.returning:
+                        out.append(f"SET {var(i, col)} = {var(value[1], value[2])}")
                 elif col in row.returning:
                     out.append(f"SET {var(i, col)} = {value[1]}")
                     exprs.append(var(i, col))

@@ -312,3 +312,11 @@ class ProbeReportTest(unittest.TestCase):
         self.assertIn("PASS: all 1 statements", out)
         self.assertIn("Note: migcheck couldn't generate schema probes, so only the recorded statements were "
                       "checked. RuntimeError: ERROR:  column a.attgenerated does not exist", out)
+
+    def test_lists_other_columns_the_table_needs(self):
+        f = finding(name="users.plan")
+        f.probe = probes.Probe("users.plan", "new column requires a value", ["INSERT"], ("users", "plan"))
+        f.others = [("bio", "column no longer accepts NULL")]
+        _, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], found=[f])
+        self.assertIn("      The table has more columns that now need a value: bio (column no longer accepts NULL).\n", out)
+        self.assertIn("v1 mentions plan and users in 1 file", out)

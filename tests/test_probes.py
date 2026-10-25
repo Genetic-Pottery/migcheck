@@ -48,20 +48,58 @@ class GenerateTest(unittest.TestCase):
         new = catalog({"users": ("r", [*USERS[1], col("plan", "text", notnull=True)])})
         found, _ = probes.generate(catalog({"users": USERS}), new, Dialect)
         self.assertEqual([(p.name, p.kind) for p in found], [("users.plan", "new column requires a value")])
-        self.assertEqual(found[0].statements, ["""INSERT INTO "public"."users" ("name") VALUES ((gen_random_uuid()::text)::text)"""])
+        self.assertEqual(found[0].statements, ["""INSERT INTO "public"."users" ("name") VALUES ((md5(random()::text))::text)"""])
 
     def test_new_column_with_a_default_needs_no_probe(self):
         new = catalog({"users": ("r", [*USERS[1], col("plan", "text", notnull=True, default=True)])})
         self.assertEqual(self.names(catalog({"users": USERS}), new), ([], []))
 
+    def run_probe(self, found, error):
+        """Returns the findings when the probes pass on the old schema and the
+        first statement fails on the new one with `error`."""
+        new = [error] + [(None, None)] * (sum(len(p.statements) for p in found) - 1)
+        return probes.findings(found, [(None, None)] * len(new), new, set(), Postgres.cause)[0]
+
     def test_column_made_required(self):
         new = catalog({"users": ("r", [*USERS[1][:2], col("bio", "text", notnull=True)])})
         found, _ = probes.generate(catalog({"users": USERS}), new, Dialect)
-        self.assertEqual(found[0].nullable_before, {"bio"})
-        failed = [("23502", 'null value in column "bio" of relation "users" violates not-null constraint')]
-        results, _ = probes.findings(found, [(None, None)], failed, set(), lambda msg, sql: "users.bio")
-        self.assertEqual([(f.probe.name, f.probe.kind) for f in results],
-                         [("users.bio", "column no longer accepts NULL")])
+        results = self.run_probe(found, ("23502", 'null value in column "bio" of relation "users" violates not-null constraint'))
+        self.assertEqual([(f.probe.name, f.probe.kind) for f in results], [("users.bio", "column no longer accepts NULL")])
+
+    def test_column_that_lost_its_default(self):
+        old = catalog({"users": ("r", [*USERS[1], col("status", "text", notnull=True, default=True)])})
+        new = catalog({"users": ("r", [*USERS[1], col("status", "text", notnull=True)])})
+        found, _ = probes.generate(old, new, Dialect)
+        self.assertEqual([(p.name, p.kind) for p in found], [("users.status", "column lost its default")])
+
+    def test_new_column_comes_before_a_column_made_required(self):
+        old = catalog({"users": USERS})
+        new = catalog({"users": ("r", [*USERS[1][:2], col("bio", "text", notnull=True), col("plan", "text", notnull=True)])})
+        found, _ = probes.generate(old, new, Dialect)
+        # The probe sets bio, which the base release might always set, so only plan can fail.
+        self.assertEqual(found[0].statements, [
+            """INSERT INTO "public"."users" ("name", "bio") VALUES ((md5(random()::text))::text, (md5(random()::text))::text)"""
+        ])
+        results = self.run_probe(found, ("23502", 'null value in column "plan" of relation "users" violates not-null constraint'))
+        self.assertEqual([(f.probe.name, f.probe.kind, f.others) for f in results],
+                         [("users.plan", "new column requires a value", [("bio", "column no longer accepts NULL")])])
+
+    def test_skips_references_to_tables_the_catalog_leaves_out(self):
+        tables = {"events": ("r", [col("id", notnull=True, default=True), col("part_id", notnull=True)])}
+        fks = {"public.events": [{"table": "public.events", "ref": "public.parts_1",
+                                  "columns": ["part_id"], "ref_columns": ["id"]}]}
+        new = catalog({"events": ("r", [*tables["events"][1], col("x", "text", notnull=True)])}, fks)
+        found, skipped = probes.generate(catalog(tables, fks), new, Dialect)
+        self.assertEqual(found, [])
+        self.assertEqual(skipped, [("events.x", "it references parts_1, which migcheck doesn't read, such as a partition")])
+
+    def test_names_relations_in_other_schemas(self):
+        old = catalog({})
+        old["relations"]["app.daily_stats"] = {"schema": "app", "name": "daily_stats", "kind": "m", "columns": {}}
+        new = catalog({})
+        new["relations"]["app.daily_stats"] = {"schema": "app", "name": "daily_stats", "kind": "v", "columns": {}}
+        found, _ = probes.generate(old, new, Dialect)
+        self.assertEqual([(p.name, p.subject) for p in found], [("app.daily_stats", (None, "daily_stats"))])
 
     def test_insert_creates_required_parent_rows(self):
         tables = {"users": USERS, "posts": ("r", [col("id", notnull=True, default=True),
@@ -72,7 +110,7 @@ class GenerateTest(unittest.TestCase):
         ]}
         statements = Dialect.insert(probes.plan(catalog(tables, fks), "public.posts", Dialect))
         self.assertEqual(statements, [
-            """WITH p0 AS (INSERT INTO "public"."users" ("name") VALUES ((gen_random_uuid()::text)::text) RETURNING "id") """
+            """WITH p0 AS (INSERT INTO "public"."users" ("name") VALUES ((md5(random()::text))::text) RETURNING "id") """
             """INSERT INTO "public"."posts" ("user_id") SELECT p0."id" FROM p0"""
         ])
 
@@ -191,6 +229,29 @@ class MySQLDialectTest(unittest.TestCase):
             "INSERT INTO `posts` (`user_id`, `team_code`) VALUES (@mc0_0, @mc1_0)",
         ])
 
+    def test_parents_set_keys_that_a_default_fills(self):
+        from migcheck.mysql import Dialect as MyDialect
+
+        tables = {
+            "groups": ("r", [col("code", "char(8)", notnull=True, default=True)]),
+            "teams": ("r", [col("code", "char(8)", notnull=True)]),
+            "members": ("r", [col("id", "int", notnull=True, default=True), col("team_code", "char(8)", notnull=True)]),
+        }
+        tables["members"][1][0][1]["identity"] = True
+        fks = {
+            ".teams": [{"table": ".teams", "ref": ".groups", "columns": ["code"], "ref_columns": ["code"]}],
+            ".members": [{"table": ".members", "ref": ".teams", "columns": ["team_code"], "ref_columns": ["code"]}],
+        }
+        cat = catalog(tables, fks)
+        cat["relations"] = {f".{k.split('.', 1)[1]}": {**v, "schema": ""} for k, v in cat["relations"].items()}
+        self.assertEqual(MyDialect.insert(probes.plan(cat, ".members", MyDialect)), [
+            "SET @mc0_0 = LEFT(MD5(RAND()), 8)",
+            "INSERT INTO `groups` (`code`) VALUES (@mc0_0)",
+            "SET @mc1_0 = @mc0_0",
+            "INSERT INTO `teams` (`code`) VALUES (@mc0_0)",
+            "INSERT INTO `members` (`team_code`) VALUES (@mc1_0)",
+        ])
+
     def test_literals(self):
         from migcheck.mysql import Dialect as MyDialect
 
@@ -198,6 +259,7 @@ class MySQLDialectTest(unittest.TestCase):
             "int unsigned": "FLOOR(1 + RAND() * 2000000000)", "tinyint(1)": "FLOOR(1 + RAND() * 100)",
             "varchar(191)": "LEFT(MD5(RAND()), 191)", "binary(16)": "LEFT(UNHEX(MD5(RAND())), 16)",
             "datetime(6)": "NOW()", "enum('Draft','published')": "'Draft'", "json": "JSON_OBJECT()",
+            "ENUM('İstanbul','x')": "'İstanbul'",
             "geometry": None,
         }
         for type_name, want in cases.items():

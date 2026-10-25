@@ -25,9 +25,11 @@ class Probe:
     name: str  # The table, column, or function, such as "users.name".
     kind: str  # What changed, such as "column dropped".
     statements: list  # Run in order, in one block. The last one is the probe itself.
-    # For an insert probe, the required columns that the old schema has too,
-    # but that accepted NULL there.
-    nullable_before: frozenset = frozenset()
+    # (table or None, word) for the report and the source search. Names from
+    # the schema can carry a schema, so they don't split reliably on ".".
+    subject: tuple = None
+    # For an insert probe, what changed in each column it needs a value for.
+    kinds: dict = field(default_factory=dict)
 
     @property
     def sql(self):
@@ -42,6 +44,7 @@ class Finding:
     files: list = field(default_factory=list)  # Base release files that mention the name.
     mentions: int = 0
     sql: str = ""  # The probe statement that failed.
+    others: list = field(default_factory=list)  # [(column, kind)] the same table now needs too.
 
 
 def short(qualified):
@@ -60,42 +63,58 @@ def generate(old, new, dialect):
         q = dialect.table(rel["schema"], rel["name"])
         label = "view" if rel["kind"] in ("v", "m") else "table"
         if key not in new_rels:
-            probes.append(Probe(short(key), f"{label} dropped", [f"SELECT * FROM {q} LIMIT 0"]))
+            probes.append(Probe(short(key), f"{label} dropped", [f"SELECT * FROM {q} LIMIT 0"],
+                                (None, rel["name"])))
             continue
         new_rel = new_rels[key]
         if rel["kind"] == "m" and new_rel["kind"] != "m":
-            probes.append(Probe(short(key), "materialized view changed", [f"REFRESH MATERIALIZED VIEW {q}"]))
+            probes.append(Probe(short(key), "materialized view changed", [f"REFRESH MATERIALIZED VIEW {q}"],
+                                (None, rel["name"])))
         for col in rel["columns"]:
             if col not in new_rel["columns"]:
                 probes.append(Probe(
-                    f"{short(key)}.{col}", "column dropped", [f"SELECT {dialect.ident(col)} FROM {q} LIMIT 0"]
+                    f"{short(key)}.{col}", "column dropped", [f"SELECT {dialect.ident(col)} FROM {q} LIMIT 0"],
+                    (rel["name"], col),
                 ))
         if rel["kind"] in ("r", "p") and new_rel["kind"] in ("r", "p"):
-            needed = [c for c, info in new_rel["columns"].items() if _requires_value(info)
-                      and not (c in rel["columns"] and _requires_value(rel["columns"][c]))]
-            if needed:
+            kinds = {c: _change(rel["columns"].get(c)) for c, info in new_rel["columns"].items()
+                     if _requires_value(info) and not (c in rel["columns"] and _requires_value(rel["columns"][c]))}
+            if kinds:
+                # Columns that accepted NULL before might be set by every
+                # insert from the base release, so the probe sets them, and
+                # only a column that every such insert leaves out can fail.
+                # With none of those, the probe leaves the columns out.
+                certain = [c for c, kind in kinds.items() if kind != NOT_NULL]
+                set_too = [c for c, kind in kinds.items() if kind == NOT_NULL] if certain else []
+                first = (certain or list(kinds))[0]
                 try:
-                    statements = dialect.insert(plan(old, key, dialect))
+                    statements = dialect.insert(plan(old, key, dialect, set_too))
                 except ProbeError as e:
-                    skipped.extend((f"{short(key)}.{c}", str(e)) for c in needed)
+                    skipped.extend((f"{short(key)}.{c}", str(e)) for c in kinds)
                 else:
-                    probes.append(Probe(
-                        f"{short(key)}.{needed[0]}", NEW_COLUMN, statements,
-                        frozenset(c for c in needed if c in rel["columns"]),
-                    ))
+                    probes.append(Probe(f"{short(key)}.{first}", kinds[first], statements, (rel["name"], first), kinds))
     new_funcs = set(new["functions"])
     for key, func in old["functions"].items():
         if key not in new_funcs:
             args = ", ".join(dialect.null(t) for t in func["args"])
             probes.append(Probe(
                 f"{func['name']}()", "function dropped or changed",
-                [f"SELECT {dialect.table(func['schema'], func['name'])}({args})"],
+                [f"SELECT {dialect.table(func['schema'], func['name'])}({args})"], (None, func["name"]),
             ))
     return probes, skipped
 
 
 NEW_COLUMN = "new column requires a value"
 NOT_NULL = "column no longer accepts NULL"
+NO_DEFAULT = "column lost its default"
+
+
+def _change(old_col):
+    """Returns what changed for a column that now requires a value, given
+    the column in the old schema, which is None for a new column."""
+    if old_col is None:
+        return NEW_COLUMN
+    return NO_DEFAULT if old_col["notnull"] else NOT_NULL
 
 
 def _requires_value(col):
@@ -116,32 +135,42 @@ class Row:
     returning: list = field(default_factory=list)  # Columns that later rows use.
 
 
-def plan(catalog, key, dialect):
-    """Returns the rows for an insert into table `key` that sets only the
-    columns the old schema requires: parent rows for its required foreign
-    keys first, then the row itself."""
+def plan(catalog, key, dialect, also=()):
+    """Returns the rows for an insert into table `key` that sets the columns
+    the old schema requires, and the columns in `also`: parent rows for its
+    required foreign keys first, then the row itself."""
     rows = []
-    _plan(catalog, key, dialect, rows, ())
+    _plan(catalog, key, dialect, rows, (), set(also))
     return rows
 
 
-def _plan(catalog, key, dialect, rows, path):
+def _plan(catalog, key, dialect, rows, path, also=frozenset()):
     if key in path:
         raise ProbeError("its required foreign keys form a cycle")
     if len(path) > 8:
         raise ProbeError("its required foreign keys are nested too deeply")
+    if key not in catalog["relations"]:
+        raise ProbeError(f"it references {short(key)}, which migcheck doesn't read, such as a partition")
     rel = catalog["relations"][key]
     values = {}
     for fk in catalog["fks"].get(key, []):
         if not all(_requires_value(rel["columns"][c]) for c in fk["columns"]):
             continue
         parent = _plan(catalog, fk["ref"], dialect, rows, (*path, key))
+        parent_cols = catalog["relations"][fk["ref"]]["columns"]
         for c, ref in zip(fk["columns"], fk["ref_columns"]):
             values[c] = ("ref", parent, ref)
             if ref not in rows[parent].returning:
                 rows[parent].returning.append(ref)
+            # Without RETURNING, a key that a default fills can't be read
+            # back, except an auto-increment key, so the parent sets it.
+            if not dialect.returning and ref not in rows[parent].values and not parent_cols[ref]["identity"]:
+                literal = dialect.literal(parent_cols[ref]["type"], catalog)
+                if literal is None:
+                    raise ProbeError(f"migcheck can't make a value of type {parent_cols[ref]['type']} for {ref}")
+                rows[parent].values[ref] = ("literal", literal)
     for c, info in rel["columns"].items():
-        if c not in values and _requires_value(info):
+        if c not in values and (_requires_value(info) or c in also):
             literal = dialect.literal(info["type"], catalog)
             if literal is None:
                 raise ProbeError(f"migcheck can't make a value of type {info['type']} for {c}")
@@ -176,11 +205,15 @@ def findings(probes, old, new, known, cause):
         failed = next(((sql, st, msg) for sql, (st, msg) in zip(p.statements, new_results) if st is not None), None)
         if failed:
             sql, state, msg = failed
-            name = cause(msg, sql) or p.name
-            kind = NOT_NULL if subject(name)[1] in p.nullable_before else p.kind
+            resolved = cause(msg, sql)
+            name = resolved or p.name
+            what = subject(resolved) if resolved else p.subject
+            column = what[1] if p.kinds else None
             if name not in seen:
                 seen.add(name)
-                found.append(Finding(Probe(name, kind, p.statements), state, msg, sql=sql))
+                others = [(c, k) for c, k in p.kinds.items() if c != column]
+                probe = Probe(name, p.kinds.get(column, p.kind), p.statements, what, p.kinds)
+                found.append(Finding(probe, state, msg, sql=sql, others=others))
     return found, unchecked
 
 
@@ -242,7 +275,7 @@ def search(root, found, limit=3):
     git tracks count. Test files sort last."""
     patterns = []
     for f in found:
-        table, word = subject(f.probe.name)
+        table, word = f.probe.subject or subject(f.probe.name)
         tables = {table, _singular(table)} if table else set()
         patterns.append((
             re.compile(_forms(word), re.IGNORECASE),

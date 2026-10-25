@@ -2,12 +2,11 @@
 
 These results come from running migcheck against real upgrades of open-source
 apps. Each run used the app's own test suite as the workload. The Postgres
-results reflect the changes listed under Unreleased in the changelog. The
-MySQL results for Ghost, Gitea, and Keycloak reflect migcheck 0.2.0, because
-migcheck's MySQL replay hasn't changed since then. The BookStack results
-reflect the Unreleased changes. Rerunning the older Postgres results with the
-Unreleased changes gave the same verdicts. When a release changes how
-migcheck records or replays queries, the affected results are rerun.
+results and the BookStack results reflect migcheck 0.3.0. The MySQL results
+for Ghost, Gitea, and Keycloak reflect migcheck 0.2.0, because migcheck's
+MySQL replay hasn't changed since then. Rerunning the older Postgres results
+with 0.3.0 gave the same verdicts. When a release changes how migcheck
+records or replays queries, the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
 |---|---|---|---|---|

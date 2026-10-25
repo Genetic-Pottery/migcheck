@@ -252,8 +252,10 @@ on them. The result still appears in the job summary.
 
 ## Try the demo
 
-The demo builds a small repository with one base release and three candidate
-releases. Two of the candidates break the base release.
+The demo builds a small repository with one base release and four candidate
+releases. Three of the candidates break the base release. Replay catches two
+of them, and a schema probe catches the third, which the demo's test never
+reaches.
 
 ```sh
 python3 -m venv /tmp/mc-venv
@@ -270,6 +272,7 @@ migcheck --repo /tmp/mc-demo --base v1 --head v2-rename \
 | `v2-expand` | Adds `full_name` next to `name` | `PASS` |
 | `v2-rename` | Renames `name` to `full_name` | `FAIL` |
 | `v2-notnull` | Adds `plan text NOT NULL` with no default | `FAIL` |
+| `v2-untested` | Drops `nickname`, which only untested code uses | `PASS WITH WARNING`, from a schema probe |
 
 ## How it works
 

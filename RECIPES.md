@@ -367,6 +367,9 @@ problems itself:
   includes a note. That's expected for a release without migrations.
 - If 10% or more of the statements fail on the base schema too, the result
   includes a warning, because migcheck didn't check those statements.
+- If migcheck can't read the schemas to write schema probes, such as on a
+  database version older than Postgres 12 or MySQL 8.0.14, the result
+  includes a note and checks only the recorded statements.
 
 Check the following yourself before trusting a result:
 
@@ -389,6 +392,12 @@ Check the following yourself before trusting a result:
 - **The migrations that ran.** If the result reports breaks from migrations
   you meant to skip, log the migrate command's output and check which
   migrations it applied.
+- **The schema probe findings.** A probe shows what might break, not what
+  does. For each finding, open the files the report lists and check whether
+  the base release still uses the name. If no file mentions it, the change is
+  probably a safe drop of a column the base release stopped using. If the
+  report lists changes that migcheck couldn't probe, those tables weren't
+  checked beyond the recorded statements.
 
 ## Other stacks
 

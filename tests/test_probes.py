@@ -47,8 +47,8 @@ class GenerateTest(unittest.TestCase):
     def test_new_required_column(self):
         new = catalog({"users": ("r", [*USERS[1], col("plan", "text", notnull=True)])})
         found, _ = probes.generate(catalog({"users": USERS}), new, Dialect)
-        self.assertEqual([(p.name, p.kind) for p in found], [("users.plan", "column requires a value")])
-        self.assertEqual(found[0].sql, """INSERT INTO "public"."users" ("name") VALUES ((gen_random_uuid()::text)::text)""")
+        self.assertEqual([(p.name, p.kind) for p in found], [("users.plan", "new column requires a value")])
+        self.assertEqual(found[0].statements, ["""INSERT INTO "public"."users" ("name") VALUES ((gen_random_uuid()::text)::text)"""])
 
     def test_new_column_with_a_default_needs_no_probe(self):
         new = catalog({"users": ("r", [*USERS[1], col("plan", "text", notnull=True, default=True)])})
@@ -56,8 +56,12 @@ class GenerateTest(unittest.TestCase):
 
     def test_column_made_required(self):
         new = catalog({"users": ("r", [*USERS[1][:2], col("bio", "text", notnull=True)])})
-        names, _ = self.names(catalog({"users": USERS}), new)
-        self.assertEqual(names, [("users.bio", "column requires a value")])
+        found, _ = probes.generate(catalog({"users": USERS}), new, Dialect)
+        self.assertEqual(found[0].nullable_before, {"bio"})
+        failed = [("23502", 'null value in column "bio" of relation "users" violates not-null constraint')]
+        results, _ = probes.findings(found, [(None, None)], failed, set(), lambda msg, sql: "users.bio")
+        self.assertEqual([(f.probe.name, f.probe.kind) for f in results],
+                         [("users.bio", "column no longer accepts NULL")])
 
     def test_insert_creates_required_parent_rows(self):
         tables = {"users": USERS, "posts": ("r", [col("id", notnull=True, default=True),
@@ -66,11 +70,11 @@ class GenerateTest(unittest.TestCase):
             {"table": "public.posts", "ref": "public.users", "columns": ["user_id"], "ref_columns": ["id"]},
             {"table": "public.posts", "ref": "public.users", "columns": ["editor_id"], "ref_columns": ["id"]},
         ]}
-        sql = probes.insert(catalog(tables, fks), "public.posts", Dialect)
-        self.assertEqual(sql, (
-            """WITH p0_0 AS (INSERT INTO "public"."users" ("name") VALUES ((gen_random_uuid()::text)::text) RETURNING "id") """
-            """INSERT INTO "public"."posts" ("user_id") SELECT p0_0."id" FROM p0_0"""
-        ))
+        statements = Dialect.insert(probes.plan(catalog(tables, fks), "public.posts", Dialect))
+        self.assertEqual(statements, [
+            """WITH p0 AS (INSERT INTO "public"."users" ("name") VALUES ((gen_random_uuid()::text)::text) RETURNING "id") """
+            """INSERT INTO "public"."posts" ("user_id") SELECT p0."id" FROM p0"""
+        ])
 
     def test_skips_cycles(self):
         tables = {"nodes": ("r", [col("id", notnull=True, default=True), col("parent_id", notnull=True)])}
@@ -102,12 +106,13 @@ class SearchTest(unittest.TestCase):
                 "db/migrate/1_add.rb": "add_column :users, :skip_thread_containment",
                 "node_modules/x/index.js": "skip_thread_containment",
                 "app/other.rb": "skip_thread_containments",
+                "CHANGELOG.md": "users: dropped skip_thread_containment",
             }
             for path, text in files.items():
                 os.makedirs(os.path.join(root, os.path.dirname(path)), exist_ok=True)
                 with open(os.path.join(root, path), "w") as f:
                     f.write(text)
-            finding = probes.Finding(probes.Probe("users.skip_thread_containment", "column dropped", ""), "", "")
+            finding = probes.Finding(probes.Probe("users.skip_thread_containment", "column dropped", [""]), "", "")
             probes.search(root, [finding])
             self.assertEqual(finding.mentions, 3)
             # In a git checkout, files the workload generated don't count.
@@ -167,3 +172,91 @@ class PostgresProbeTest(unittest.TestCase):
         self.assertEqual(unchecked, [])
         self.assertEqual(sorted(f.probe.name for f in results),
                          ["notes", "posts.slug", "score()", "summary", "users.bio"])
+
+
+class MySQLDialectTest(unittest.TestCase):
+    def test_insert_sets_parent_keys_through_variables(self):
+        from migcheck.mysql import Dialect as MyDialect
+
+        rows = [
+            probes.Row("", "users", {"name": ("literal", "MD5(RAND())")}, ["id"]),
+            probes.Row("", "teams", {"code": ("literal", "LEFT(MD5(RAND()), 8)")}, ["code"]),
+            probes.Row("", "posts", {"user_id": ("ref", 0, "id"), "team_code": ("ref", 1, "code")}),
+        ]
+        self.assertEqual(MyDialect.insert(rows), [
+            "INSERT INTO `users` (`name`) VALUES (MD5(RAND()))",
+            "SET @mc0_0 = LAST_INSERT_ID()",
+            "SET @mc1_0 = LEFT(MD5(RAND()), 8)",
+            "INSERT INTO `teams` (`code`) VALUES (@mc1_0)",
+            "INSERT INTO `posts` (`user_id`, `team_code`) VALUES (@mc0_0, @mc1_0)",
+        ])
+
+    def test_literals(self):
+        from migcheck.mysql import Dialect as MyDialect
+
+        cases = {
+            "int unsigned": "FLOOR(1 + RAND() * 2000000000)", "tinyint(1)": "FLOOR(1 + RAND() * 100)",
+            "varchar(191)": "LEFT(MD5(RAND()), 191)", "binary(16)": "LEFT(UNHEX(MD5(RAND())), 16)",
+            "datetime(6)": "NOW()", "enum('Draft','published')": "'Draft'", "json": "JSON_OBJECT()",
+            "geometry": None,
+        }
+        for type_name, want in cases.items():
+            self.assertEqual(MyDialect.literal(type_name, {}), want, type_name)
+
+
+@unittest.skipUnless(have_docker(), "needs Docker")
+class MySQLProbeTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from migcheck.mysql import MySQL
+
+        cls.db = MySQL()
+        try:
+            cls.db.start()
+        except Exception:
+            cls.db.stop()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.db.stop()
+
+    def test_finds_untested_breaks(self):
+        from migcheck.mysql import MySQL
+
+        db = self.db
+        base = """
+            CREATE TABLE users (id int AUTO_INCREMENT PRIMARY KEY, name varchar(20) NOT NULL,
+                                status enum('active','gone') NOT NULL, created datetime NOT NULL, bio text);
+            CREATE TABLE teams (code char(8) PRIMARY KEY, title text NOT NULL);
+            CREATE TABLE posts (id bigint AUTO_INCREMENT PRIMARY KEY, user_id int NOT NULL,
+                                team_code char(8) NOT NULL, body text NOT NULL,
+                                FOREIGN KEY (user_id) REFERENCES users (id),
+                                FOREIGN KEY (team_code) REFERENCES teams (code));
+            CREATE TABLE notes (id int AUTO_INCREMENT PRIMARY KEY, body text);
+            CREATE TABLE settings (id int AUTO_INCREMENT PRIMARY KEY, data json NOT NULL);
+            CREATE FUNCTION score(a int) RETURNS int DETERMINISTIC RETURN a;
+        """
+        for name in ("old", "new"):
+            db.create_db(name)
+            _run_mysql(db, name, base)
+        _run_mysql(db, "new", """
+            ALTER TABLE users DROP COLUMN bio;
+            ALTER TABLE posts ADD COLUMN slug varchar(50) NOT NULL;
+            ALTER TABLE settings ADD COLUMN kind varchar(10) NOT NULL DEFAULT 'x';
+            DROP TABLE notes;
+            DROP FUNCTION score;
+        """)
+        found, skipped = probes.generate(db.catalog("old"), db.catalog("new"), db.dialect)
+        self.assertEqual(skipped, [])
+        statements = probes.as_statements(found, 0)
+        old, new = db.replay("old", statements), db.replay("new", statements)
+        results, unchecked = probes.findings(found, old, new, set(), MySQL.cause)
+        self.assertEqual(unchecked, [])
+        self.assertEqual(sorted(f.probe.name for f in results), ["notes", "posts.slug", "score()", "users.bio"])
+
+
+def _run_mysql(db, name, sql):
+    from .helpers import mysql_stdin
+
+    mysql_stdin(db, name, sql.encode())

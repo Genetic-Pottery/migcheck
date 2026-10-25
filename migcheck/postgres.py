@@ -284,6 +284,33 @@ class Dialect:
         return f"NULL::{type_name}"
 
     @classmethod
+    def insert(cls, rows):
+        """Returns the rows as one statement: each parent row in a CTE that
+        returns the columns its children use, then the last row."""
+        ctes, select = [], ""
+        for i, row in enumerate(rows):
+            exprs, sources = [], []
+            for value in row.values.values():
+                if value[0] == "literal":
+                    exprs.append(value[1])
+                else:
+                    exprs.append(f"p{value[1]}.{cls.ident(value[2])}")
+                    if f"p{value[1]}" not in sources:
+                        sources.append(f"p{value[1]}")
+            q = cls.table(row.schema, row.table)
+            cols = ", ".join(cls.ident(c) for c in row.values)
+            ret = f" RETURNING {', '.join(cls.ident(c) for c in row.returning)}" if row.returning else ""
+            if not row.values:
+                select = f"INSERT INTO {q} DEFAULT VALUES{ret}"
+            elif sources:
+                select = f"INSERT INTO {q} ({cols}) SELECT {', '.join(exprs)} FROM {', '.join(sources)}{ret}"
+            else:
+                select = f"INSERT INTO {q} ({cols}) VALUES ({', '.join(exprs)}){ret}"
+            if i < len(rows) - 1:
+                ctes.append(f"p{i} AS ({select})")
+        return [f"WITH {', '.join(ctes)} {select}" if ctes else select]
+
+    @classmethod
     def literal(cls, type_name, catalog):
         if type_name.endswith("[]"):
             return f"'{{}}'::{type_name}"

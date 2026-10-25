@@ -23,7 +23,7 @@ def run_report(statements, old, new, workload_exit=0, head_name=None, schema_cha
 
 
 def finding(name="Watchlist.severity", files=("src/watchlist.ts",), mentions=1):
-    probe = probes.Probe(name, "column dropped", 'SELECT "severity" FROM "public"."Watchlist" LIMIT 0')
+    probe = probes.Probe(name, "column dropped", ['SELECT "severity" FROM "public"."Watchlist" LIMIT 0'])
     return probes.Finding(probe, "42703", 'column "severity" does not exist', list(files), mentions)
 
 

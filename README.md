@@ -324,15 +324,18 @@ migcheck also accounts for how test runners use the database:
 ### Schema probes
 
 Replay checks only the queries the workload made, so it misses breaks in code
-the tests never run. On Postgres, migcheck also writes probe queries from the
-schema change:
+the tests never run. So migcheck also writes probe queries from the schema
+change:
 
 - For each table, view, column, or function that the head release's
   migrations drop or rename, it writes a query that uses it.
 - For each table where an insert needs a value that it didn't need before,
-  such as a new `NOT NULL` column without a database default, it writes an
-  insert that sets only the columns the base schema requires. It inserts
-  parent rows for the required foreign keys first.
+  it writes an insert that sets only the columns the base schema requires. It
+  inserts parent rows for the required foreign keys first. The report labels
+  a new `NOT NULL` column without a database default "new column requires a
+  value", because every insert from the base release leaves it out. It labels
+  an existing column that stops accepting NULL "column no longer accepts
+  NULL", because the base release might always set it.
 
 Probes replay with the recorded queries, on both schemas, and roll back. A
 probe that works on the old schema and fails on the new one is a finding.
@@ -352,11 +355,10 @@ and migcheck removes the container and worktrees when it finishes.
 ## Limitations
 
 - migcheck checks only the queries the workload makes. If your tests never
-  touch a table, replay can't see it break. On Postgres, schema probes cover
-  dropped and renamed tables, columns, and functions, and new required
-  columns. They don't cover changes that depend on values, such as a new
-  unique index or a narrower type, or index changes that break an
-  `ON CONFLICT`. migcheck doesn't generate probes for MySQL.
+  touch a table, replay can't see it break. Schema probes cover dropped and
+  renamed tables, columns, and functions, and required columns. They don't
+  cover changes that depend on values, such as a new unique index or a
+  narrower type, or index changes that break an `ON CONFLICT`.
 - migcheck applies migrations to an empty database. A migration that fails or
   locks for a long time on a large production table can pass here.
 - Replay runs one statement at a time. Failures that depend on concurrency

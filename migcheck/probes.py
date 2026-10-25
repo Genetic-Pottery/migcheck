@@ -24,7 +24,14 @@ from .common import Statement
 class Probe:
     name: str  # The table, column, or function, such as "users.name".
     kind: str  # What changed, such as "column dropped".
-    sql: str
+    statements: list  # Run in order, in one block. The last one is the probe itself.
+    # For an insert probe, the required columns that the old schema has too,
+    # but that accepted NULL there.
+    nullable_before: frozenset = frozenset()
+
+    @property
+    def sql(self):
+        return self.statements[-1]
 
 
 @dataclass
@@ -34,6 +41,7 @@ class Finding:
     msg: str
     files: list = field(default_factory=list)  # Base release files that mention the name.
     mentions: int = 0
+    sql: str = ""  # The probe statement that failed.
 
 
 def short(qualified):
@@ -52,35 +60,42 @@ def generate(old, new, dialect):
         q = dialect.table(rel["schema"], rel["name"])
         label = "view" if rel["kind"] in ("v", "m") else "table"
         if key not in new_rels:
-            probes.append(Probe(short(key), f"{label} dropped", f"SELECT * FROM {q} LIMIT 0"))
+            probes.append(Probe(short(key), f"{label} dropped", [f"SELECT * FROM {q} LIMIT 0"]))
             continue
         new_rel = new_rels[key]
         if rel["kind"] == "m" and new_rel["kind"] != "m":
-            probes.append(Probe(short(key), "materialized view changed", f"REFRESH MATERIALIZED VIEW {q}"))
+            probes.append(Probe(short(key), "materialized view changed", [f"REFRESH MATERIALIZED VIEW {q}"]))
         for col in rel["columns"]:
             if col not in new_rel["columns"]:
                 probes.append(Probe(
-                    f"{short(key)}.{col}", "column dropped", f"SELECT {dialect.ident(col)} FROM {q} LIMIT 0"
+                    f"{short(key)}.{col}", "column dropped", [f"SELECT {dialect.ident(col)} FROM {q} LIMIT 0"]
                 ))
         if rel["kind"] in ("r", "p") and new_rel["kind"] in ("r", "p"):
             needed = [c for c, info in new_rel["columns"].items() if _requires_value(info)
                       and not (c in rel["columns"] and _requires_value(rel["columns"][c]))]
             if needed:
                 try:
-                    sql = insert(old, key, dialect)
+                    statements = dialect.insert(plan(old, key, dialect))
                 except ProbeError as e:
                     skipped.extend((f"{short(key)}.{c}", str(e)) for c in needed)
                 else:
-                    probes.extend(Probe(f"{short(key)}.{c}", "column requires a value", sql) for c in needed[:1])
+                    probes.append(Probe(
+                        f"{short(key)}.{needed[0]}", NEW_COLUMN, statements,
+                        frozenset(c for c in needed if c in rel["columns"]),
+                    ))
     new_funcs = set(new["functions"])
     for key, func in old["functions"].items():
         if key not in new_funcs:
             args = ", ".join(dialect.null(t) for t in func["args"])
             probes.append(Probe(
                 f"{func['name']}()", "function dropped or changed",
-                f"SELECT {dialect.table(func['schema'], func['name'])}({args})",
+                [f"SELECT {dialect.table(func['schema'], func['name'])}({args})"],
             ))
     return probes, skipped
+
+
+NEW_COLUMN = "new column requires a value"
+NOT_NULL = "column no longer accepts NULL"
 
 
 def _requires_value(col):
@@ -91,73 +106,81 @@ class ProbeError(Exception):
     pass
 
 
-def insert(catalog, key, dialect):
-    """Returns an insert into table `key` that sets only the columns the old
-    schema requires, with parent rows for its required foreign keys, as one
-    statement."""
-    ctes = []
-    select = _insert(catalog, key, dialect, ctes, ())
-    if not ctes:
-        return select
-    return "WITH " + ", ".join(ctes) + " " + select
+@dataclass
+class Row:
+    """One row an insert probe writes. Each value is ("literal", sql) or
+    ("ref", index of a parent row, its column)."""
+    schema: str
+    table: str
+    values: dict
+    returning: list = field(default_factory=list)  # Columns that later rows use.
 
 
-def _insert(catalog, key, dialect, ctes, path, returning=None):
-    """Appends a CTE for each parent row the insert into `key` needs, and
-    returns the insert itself."""
+def plan(catalog, key, dialect):
+    """Returns the rows for an insert into table `key` that sets only the
+    columns the old schema requires: parent rows for its required foreign
+    keys first, then the row itself."""
+    rows = []
+    _plan(catalog, key, dialect, rows, ())
+    return rows
+
+
+def _plan(catalog, key, dialect, rows, path):
     if key in path:
         raise ProbeError("its required foreign keys form a cycle")
     if len(path) > 8:
         raise ProbeError("its required foreign keys are nested too deeply")
     rel = catalog["relations"][key]
-    values, sources = {}, []
+    values = {}
     for fk in catalog["fks"].get(key, []):
         if not all(_requires_value(rel["columns"][c]) for c in fk["columns"]):
             continue
-        parent = f"p{len(ctes)}_{len(path)}"
-        body = _insert(catalog, fk["ref"], dialect, ctes, (*path, key), returning=fk["ref_columns"])
-        ctes.append(f"{parent} AS ({body})")
-        sources.append(parent)
+        parent = _plan(catalog, fk["ref"], dialect, rows, (*path, key))
         for c, ref in zip(fk["columns"], fk["ref_columns"]):
-            values[c] = f"{parent}.{dialect.ident(ref)}"
+            values[c] = ("ref", parent, ref)
+            if ref not in rows[parent].returning:
+                rows[parent].returning.append(ref)
     for c, info in rel["columns"].items():
         if c not in values and _requires_value(info):
             literal = dialect.literal(info["type"], catalog)
             if literal is None:
                 raise ProbeError(f"migcheck can't make a value of type {info['type']} for {c}")
-            values[c] = literal
-    q = dialect.table(rel["schema"], rel["name"])
-    cols = ", ".join(dialect.ident(c) for c in values)
-    ret = f" RETURNING {', '.join(dialect.ident(c) for c in returning)}" if returning else ""
-    if not values:
-        return f"INSERT INTO {q} DEFAULT VALUES{ret}"
-    exprs = ", ".join(values.values())
-    if sources:
-        return f"INSERT INTO {q} ({cols}) SELECT {exprs} FROM {', '.join(sources)}{ret}"
-    return f"INSERT INTO {q} ({cols}) VALUES ({exprs}){ret}"
+            values[c] = ("literal", literal)
+    rows.append(Row(rel["schema"], rel["name"], values))
+    return len(rows) - 1
 
 
 def as_statements(probes, first_block):
-    """Returns the probes as statements, each in its own block that replay
-    rolls back."""
-    return [Statement(p.sql, first_block + i, False) for i, p in enumerate(probes)]
+    """Returns the probes' statements, each probe in its own block that
+    replay rolls back."""
+    return [Statement(sql, first_block + i, False) for i, p in enumerate(probes) for sql in p.statements]
 
 
 def findings(probes, old, new, known, cause):
-    """Returns (findings, unchecked) for the probes' replay results. Each
-    finding is named by what its error names, through `cause`, when that
-    resolves. Findings for names in `known`, the causes replay already found,
-    are left out, because replay shows those breaks with the workload's own
-    queries."""
+    """Returns (findings, unchecked) for the probes' replay results, in
+    statement order. A probe whose statements fail on the old schema can't
+    be checked. Otherwise its first failure on the new schema is a finding,
+    named by what the error names, through `cause`, when that resolves.
+    Findings for names in `known`, the causes replay already found, are left
+    out, because replay shows those breaks with the workload's own queries."""
     found, unchecked, seen = [], [], set(known)
-    for p, (old_state, old_msg), (new_state, new_msg) in zip(probes, old, new):
-        if old_state is not None:
-            unchecked.append((p.name, f"the probe fails on the old schema too: [{old_state}] {old_msg}"))
-        elif new_state is not None:
-            name = cause(new_msg, p.sql) or p.name
+    pos = 0
+    for p in probes:
+        n = len(p.statements)
+        old_results, new_results = old[pos:pos + n], new[pos:pos + n]
+        pos += n
+        failed_old = next(((st, msg) for st, msg in old_results if st is not None), None)
+        if failed_old:
+            unchecked.append((p.name, f"the probe fails on the old schema too: [{failed_old[0]}] {failed_old[1]}"))
+            continue
+        failed = next(((sql, st, msg) for sql, (st, msg) in zip(p.statements, new_results) if st is not None), None)
+        if failed:
+            sql, state, msg = failed
+            name = cause(msg, sql) or p.name
+            kind = NOT_NULL if subject(name)[1] in p.nullable_before else p.kind
             if name not in seen:
                 seen.add(name)
-                found.append(Finding(Probe(name, p.kind, p.sql), new_state, new_msg))
+                found.append(Finding(Probe(name, kind, p.statements), state, msg, sql=sql))
     return found, unchecked
 
 
@@ -168,8 +191,12 @@ SKIP_DIRS = re.compile(
     r".*migrat.*)$",
     re.IGNORECASE,
 )
+# Lockfiles, build output, schema dumps, and documentation, which mention
+# names without using them.
 SKIP_FILES = re.compile(
-    r"(\.lock|-lock\.json|-lock\.yaml|\.min\.js|\.map|\.snap|^schema\.rb|^structure\.sql)$", re.IGNORECASE
+    r"(\.lock|-lock\.json|-lock\.yaml|\.min\.js|\.map|\.snap|^schema\.rb|^structure\.sql"
+    r"|\.md|\.rst|\.adoc|\.txt)$",
+    re.IGNORECASE,
 )
 
 

@@ -396,28 +396,42 @@ All server tests passed in each run.
 ## Schema probes
 
 The schema probes ran on Plane's 25 migrations, on Cal.com v5.6.20 to v5.7.12,
-and on the Postgres upgrades below that replay passed. They ran on Postgres
-only, because migcheck doesn't generate probes for MySQL.
+and on the upgrades below. On the upgrades that replay failed, the table lists
+only the findings that replay didn't already show.
 
-| Upgrade | Probe findings |
-|---|---|
-| Cal.com v5.8.14 to v5.9.15 | None |
-| Bitwarden v2026.4.2 to v2026.5.0 | None |
-| Bitwarden v2026.5.0 to v2026.6.2 | `Send.Data` requires a value |
-| Outline v1.8.1 to v1.9.0 | `teams.collaborativeEditing` is dropped |
-| Outline v1.11.0 to v1.12.0 | None |
-| Akkoma v3.19.0 to v3.20.1 | None |
-| Lemmy 1.0.0-beta.1 to 1.0.0-beta.2 | None |
-| n8n 2.44.6 to 2.45.3 | None |
+| Upgrade | Database | Replay | Probe findings |
+|---|---|---|---|
+| Cal.com v5.8.14 to v5.9.15 | Postgres | Pass | None |
+| Bitwarden v2026.4.2 to v2026.5.0 | Postgres | Pass | None |
+| Bitwarden v2026.5.0 to v2026.6.2 | Postgres | Pass | `Send.Data` no longer accepts NULL |
+| Outline v1.8.1 to v1.9.0 | Postgres | Pass | `teams.collaborativeEditing` is dropped |
+| Outline v1.11.0 to v1.12.0 | Postgres | Pass | None |
+| Akkoma v3.19.0 to v3.20.1 | Postgres | Pass | None |
+| Lemmy 1.0.0-beta.1 to 1.0.0-beta.2 | Postgres | Pass | None |
+| n8n 2.44.6 to 2.45.3 | Postgres | Pass | None |
+| BookStack v24.02.3 to v24.05.4 | MySQL | Fail | None |
+| BookStack v25.07.3 to v25.11.6 | MySQL | Fail | `role_permissions.display_name` and `role_permissions.description` are dropped |
+| BookStack v25.11.6 to v25.12.9 | MySQL | Pass | None |
+| BookStack v26.05.5 to v26.09.2 | MySQL | Pass | None |
+| Gitea v1.23.8 to v1.24.7 | MySQL | Fail | None |
+| Gitea v1.24.7 to v1.25.5 | MySQL | Pass | `notice.description` no longer accepts NULL |
+| Ghost v6.69.0 to v6.70.0 | MySQL | Fail | None |
+| Ghost v6.71.0 to v6.72.0 | MySQL | Pass | None |
 
-The two findings show the limits of a query written from the schema:
+None of these findings is a confirmed break. They show the limits of a query
+written from the schema:
 
 - `teams.collaborativeEditing` is a contract step. v1.8.1's model no longer
   declares the column, so dropping it is safe. The report said that no file
   in v1.8.1 mentions the column outside its migrations.
-- `Send.Data` might not be a break. The probe inserts a `Send` without
-  `Data`. v2026.5.0's tests always set `Data`, and these results don't show
-  whether the rest of v2026.5.0 does. The source search finds 118 files in
-  v2026.5.0 that mention both `Send` and `Data`, which doesn't narrow it
-  down.
-
+- BookStack's migration is named `remove_unused_columns`. In v25.07.3, the
+  only mention of the two columns on the `RolePermission` model is a doc
+  comment, and Eloquent reads them with `SELECT *`, so dropping them is
+  probably safe. The source search can't tell a doc comment from a use.
+- `Send.Data` and `notice.description` existed in the base release and
+  accepted NULL there. The probe inserts a row without them, but the base
+  release might always set them. v1.24.7 writes `notice.description` from a
+  Go string, which is never NULL. These results don't show whether
+  v2026.5.0 ever writes a `Send` without `Data`. The report labels this kind
+  of change "column no longer accepts NULL", apart from new required columns,
+  which every insert from the base release leaves out.

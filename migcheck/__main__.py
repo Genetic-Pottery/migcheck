@@ -315,7 +315,7 @@ def _print_probes(base, head, found, unchecked, fail_on_probes):
         for f in found:
             print(f"  {f.probe.name}")
             print(f"      [{f.state}] {f.msg}")
-            print(f"      {f.probe.sql[:300]}")
+            print(f"      {(f.sql or f.probe.sql)[:300]}")
             print(f"      {_mention(base, f)}")
             print()
     if unchecked:
@@ -343,7 +343,7 @@ def _markdown_probes(base, head_md, found, unchecked, fail_on_probes):
             md.append(f"**`{f.probe.name}`**: `{f.state}` {_md_escape(f.msg)}")
             md.append("")
             md.append("```sql")
-            md.append(f.probe.sql[:1000])
+            md.append((f.sql or f.probe.sql)[:1000])
             md.append("```")
             md.append(_mention(f"`{base}`", f, "`", [f"`{p}`" for p in f.files]))
     if unchecked:

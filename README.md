@@ -332,10 +332,14 @@ change:
 - For each table where an insert needs a value that it didn't need before,
   it writes an insert that sets only the columns the base schema requires. It
   inserts parent rows for the required foreign keys first. The report labels
-  a new `NOT NULL` column without a database default "new column requires a
-  value", because every insert from the base release leaves it out. It labels
-  an existing column that stops accepting NULL "column no longer accepts
-  NULL", because the base release might always set it.
+  what changed:
+  - "New column requires a value": a new `NOT NULL` column without a database
+    default. Every insert from the base release leaves it out.
+  - "Column lost its default": a `NOT NULL` column whose default was dropped.
+    Every insert from the base release that relied on the default fails.
+  - "Column no longer accepts NULL": a nullable column made `NOT NULL`. The
+    base release might always set it, so the probe sets it when the table has
+    a change of the first two kinds, and leaves it out otherwise.
 
 Probes replay with the recorded queries, on both schemas, and roll back. A
 probe that works on the old schema and fails on the new one is a finding.

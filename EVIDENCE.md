@@ -10,7 +10,7 @@ records or replays queries, the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
 |---|---|---|---|---|
-| Plane | Django | Postgres | 25 migrations | Caught 6 of 9 breaks |
+| Plane | Django | Postgres | 25 migrations | Caught 6 of 11 breaks; schema probes flagged the other 5 |
 | Gitea | xorm (Go) | Postgres, MySQL | 2 | Caught the 1 break |
 | Ghost | Knex (Node) | MySQL | 2 | Caught all 3 breaks |
 | Keycloak | Hibernate (Java) | Postgres, MySQL | 2 | Caught all 3 breaks |
@@ -20,17 +20,42 @@ records or replays queries, the affected results are rerun.
 | Akkoma | Ecto (Elixir) | Postgres | 2 | Caught all 4 breaks |
 | BookStack | Laravel (PHP) | MySQL | 4 | Caught all 4 breaks |
 | Bitwarden | Entity Framework (.NET) | Postgres | 4 | Caught all 5 breaks |
-| Cal.com | Prisma (Node) | Postgres | 3 | Caught 1 of 2 breaks |
+| Cal.com | Prisma (Node) | Postgres | 3 | Caught 1 of 2 breaks; schema probes flagged the other |
 | Outline | Sequelize (Node) | Postgres | 3 | Caught the 1 break |
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
 
+The schema probes are unreleased. Their results come from the Plane runs and
+from the Postgres upgrades listed in [Schema probes](#schema-probes).
+
 ## Plane
 
-migcheck checked 25 migrations from Plane's history. It caught 6 of the 9
-breaking migrations. It missed the other 3 because Plane's tests never queried
-the changed tables.
+migcheck checked 25 migrations from Plane's history, `0098` through `0122`.
+Replay caught 6 of the 11 breaking migrations. It missed the other 5 because
+Plane's tests never queried the changed tables. The schema probes flagged all
+5:
+
+| Migration | Change the probes found |
+|---|---|
+| `0098` | `profiles.is_app_rail_docked` requires a value |
+| `0100` | `profiles.has_marketing_email_consent` requires a value |
+| `0102` | `pages.sort_order` requires a value |
+| `0110` | `workspace_user_properties.navigation_control_preference` requires a value |
+| `0118` | `workspace_user_properties.product_tour` is dropped, and `profiles.product_tour` requires a value |
+
+Each of these migrations adds a field with a Python default. Django fills the
+existing rows and then drops the default from the database, so the old
+release's inserts, which don't set the new column, fail. An earlier version of
+these results counted only 9 breaking migrations, because it counted `0102`
+and `0110` as safe. The probes showed that they aren't.
+
+The probes also found more breaks in three migrations that replay had caught.
+`0104` makes `rich_filters` required in four more tables, `0113` makes
+`webhooks.version` and `profiles.is_navigation_tour_completed` required, and
+`0117` drops `pages.description` and `draft_issues.description`. The probes
+flagged nothing in the other 14 migrations. `0099` couldn't run, because
+Plane has two `0098` migrations at that commit.
 
 ## Gitea
 
@@ -325,11 +350,13 @@ database has no default for the column. Prisma's `@default(uuid())` generates
 the value in v5.8.14's client, and v5.7.12's client doesn't know the column.
 Every user that v5.7.12 creates breaks.
 
-migcheck missed a break in v5.7.12. v5.7.12 drops `Watchlist.severity` and
+Replay missed a break in v5.7.12. v5.7.12 drops `Watchlist.severity` and
 other `Watchlist` columns, and v5.6.20's watchlist checks filter on
 `severity`. v5.6.20's integration tests and seed script never reach those
-checks, so the run had no queries to replay. This finding comes from reading
-the code, not from a run.
+checks, so the run had no queries to replay. The schema probes flagged
+`severity`, `createdAt`, `createdById`, `updatedAt`, and `updatedById`. The
+source search finds 3 to 6 files in v5.6.20 that mention each column and
+`Watchlist`, such as `packages/features/watchlist/watchlist.repository.ts`.
 
 v5.9.15's migrations add tables, change column types in the tables they
 add, and drop NOT NULL constraints, so migcheck passed it.
@@ -365,3 +392,32 @@ were 36 to 54 statements per run, most of the statements that migcheck
 skipped.
 
 All server tests passed in each run.
+
+## Schema probes
+
+The schema probes ran on Plane's 25 migrations, on Cal.com v5.6.20 to v5.7.12,
+and on the Postgres upgrades below that replay passed. They ran on Postgres
+only, because migcheck doesn't generate probes for MySQL.
+
+| Upgrade | Probe findings |
+|---|---|
+| Cal.com v5.8.14 to v5.9.15 | None |
+| Bitwarden v2026.4.2 to v2026.5.0 | None |
+| Bitwarden v2026.5.0 to v2026.6.2 | `Send.Data` requires a value |
+| Outline v1.8.1 to v1.9.0 | `teams.collaborativeEditing` is dropped |
+| Outline v1.11.0 to v1.12.0 | None |
+| Akkoma v3.19.0 to v3.20.1 | None |
+| Lemmy 1.0.0-beta.1 to 1.0.0-beta.2 | None |
+| n8n 2.44.6 to 2.45.3 | None |
+
+The two findings show the limits of a query written from the schema:
+
+- `teams.collaborativeEditing` is a contract step. v1.8.1's model no longer
+  declares the column, so dropping it is safe. The report said that no file
+  in v1.8.1 mentions the column outside its migrations.
+- `Send.Data` might not be a break. The probe inserts a `Send` without
+  `Data`. v2026.5.0's tests always set `Data`, and these results don't show
+  whether the rest of v2026.5.0 does. The source search finds 118 files in
+  v2026.5.0 that mention both `Send` and `Data`, which doesn't narrow it
+  down.
+

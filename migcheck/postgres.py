@@ -207,6 +207,100 @@ $f$;
 """
 
 
+# The base and head schemas as JSON, for generating schema probes. It leaves
+# out the catalogs, objects that extensions own, partitions, which their
+# parent table covers, and migcheck's own objects.
+APP_SCHEMAS = "n.nspname NOT IN ('pg_catalog', 'information_schema', '_migcheck') AND n.nspname NOT LIKE 'pg\\_toast%'"
+CATALOG = f"""
+COPY (SELECT json_build_object(
+  'relations', (SELECT coalesce(json_agg(json_build_object(
+      'schema', n.nspname, 'name', c.relname, 'kind', c.relkind,
+      'columns', (SELECT coalesce(json_agg(json_build_object(
+          'name', a.attname, 'type', format_type(a.atttypid, a.atttypmod), 'notnull', a.attnotnull,
+          'default', a.atthasdef, 'generated', a.attgenerated <> '', 'identity', a.attidentity <> '')
+          ORDER BY a.attnum), '[]')
+        FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped))), '[]')
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition AND {APP_SCHEMAS}
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                      WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')),
+  'fks', (SELECT coalesce(json_agg(json_build_object(
+      'table', n.nspname || '.' || c.relname, 'ref', rn.nspname || '.' || rc.relname,
+      'columns', (SELECT json_agg(a.attname ORDER BY k.i) FROM unnest(con.conkey) WITH ORDINALITY k(num, i)
+                  JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.num),
+      'ref_columns', (SELECT json_agg(a.attname ORDER BY k.i) FROM unnest(con.confkey) WITH ORDINALITY k(num, i)
+                      JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.num))), '[]')
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_class rc ON rc.oid = con.confrelid JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+    WHERE con.contype = 'f' AND {APP_SCHEMAS}),
+  'functions', (SELECT coalesce(json_agg(json_build_object(
+      'schema', n.nspname, 'name', p.proname,
+      'args', (SELECT coalesce(json_agg(format_type(t, NULL) ORDER BY i), '[]')
+               FROM unnest(p.proargtypes::oid[]) WITH ORDINALITY u(t, i)))), '[]')
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prokind = 'f' AND {APP_SCHEMAS} AND p.proname NOT LIKE '\\_migcheck%'
+      AND p.prorettype NOT IN ('trigger'::regtype, 'event_trigger'::regtype)
+      AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                      WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e')),
+  'enums', (SELECT coalesce(json_object_agg(format_type(t.oid, NULL),
+      (SELECT e.enumlabel FROM pg_enum e WHERE e.enumtypid = t.oid ORDER BY e.enumsortorder LIMIT 1)), '{{}}')
+    FROM pg_type t WHERE t.typtype = 'e'),
+  'domains', (SELECT coalesce(json_object_agg(format_type(t.oid, NULL), format_type(t.typbasetype, t.typtypmod)), '{{}}')
+    FROM pg_type t WHERE t.typtype = 'd')
+)::text) TO STDOUT WITH CSV;
+"""
+# Values for the columns an insert probe must set, by type name. Probes run
+# after replay, so text and integers are random, to miss the unique values
+# that replayed rows hold. Types with a length or precision take a value that
+# fits any length.
+LITERALS = {
+    "smallint": "(1 + random() * 32000)::int", "integer": "(1 + random() * 2e9)::int",
+    "bigint": "(1 + random() * 2e9)::bigint", "numeric": "0", "real": "0", "double precision": "0",
+    "money": "0", "oid": "0", "boolean": "false", "uuid": "gen_random_uuid()", "json": "'{}'",
+    "jsonb": "'{}'", "bytea": "''", "interval": "'1 day'", "inet": "'127.0.0.1'", "cidr": "'127.0.0.1'",
+    "macaddr": "'08:00:2b:01:02:03'", "tsvector": "''", "xml": "'<migcheck/>'", "point": "'(0,0)'",
+    "date": "now()", "timestamp without time zone": "now()", "timestamp with time zone": "now()",
+    "time without time zone": "now()", "time with time zone": "now()",
+    "text": "gen_random_uuid()::text", "citext": "gen_random_uuid()::text", "name": "gen_random_uuid()::text",
+}
+# Text with a length limit takes that many characters of a random value.
+LIMITED_TEXT = re.compile(r"^(character varying|character)\((\d+)\)$")
+
+
+class Dialect:
+    """Writes probe SQL for Postgres."""
+
+    @staticmethod
+    def ident(name):
+        return '"' + name.replace('"', '""') + '"'
+
+    @classmethod
+    def table(cls, schema, name):
+        return f"{cls.ident(schema)}.{cls.ident(name)}"
+
+    @staticmethod
+    def null(type_name):
+        return f"NULL::{type_name}"
+
+    @classmethod
+    def literal(cls, type_name, catalog):
+        if type_name.endswith("[]"):
+            return f"'{{}}'::{type_name}"
+        if type_name in catalog["enums"]:
+            label = catalog["enums"][type_name].replace("'", "''")
+            return f"'{label}'::{type_name}"
+        if type_name in catalog["domains"]:
+            base = cls.literal(catalog["domains"][type_name], catalog)
+            return base and f"{base}::{type_name}"
+        if m := LIMITED_TEXT.match(type_name):
+            return f"left(md5(random()::text), {m.group(2)})::{type_name}"
+        if type_name in ("character varying", "character"):
+            return f"md5(random()::text)::{type_name}"
+        value = LITERALS.get(re.sub(r"\(.*?\)", "", type_name).strip())
+        return value and f"({value})::{type_name}"
+
+
 class Postgres:
     name = "Postgres"
     default_image = DEFAULT_IMAGE
@@ -279,6 +373,27 @@ class Postgres:
         # Comments name the database, and pg_dump 17.6 and later add \restrict
         # lines with a random key.
         return "\n".join(line for line in dump.splitlines() if line and not line.startswith(("--", "\\")))
+
+    dialect = Dialect
+
+    def catalog(self, db):
+        """Returns the database's tables, columns, foreign keys, and functions,
+        for generating schema probes."""
+        row = next(csv.reader(io.StringIO(self._psql(db, CATALOG))))
+        raw = json.loads(row[0])
+        fks = {}
+        for fk in raw["fks"]:
+            fks.setdefault(fk["table"], []).append(fk)
+        return {
+            "relations": {
+                f"{r['schema']}.{r['name']}": {**r, "columns": {c["name"]: c for c in r["columns"]}}
+                for r in raw["relations"]
+            },
+            "fks": fks,
+            "functions": {f"{f['schema']}.{f['name']}({', '.join(f['args'])})": f for f in raw["functions"]},
+            "enums": raw["enums"],
+            "domains": raw["domains"],
+        }
 
     def mark(self):
         """Returns a point in the server's transaction history. Rows written

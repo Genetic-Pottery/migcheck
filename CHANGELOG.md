@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- On Postgres, migcheck writes schema probes: queries generated from the
+  schema change, for the tables, columns, and functions that the head
+  release's migrations drop or rename, and for inserts that need a value they
+  didn't need before. A probe that works on the old schema and fails on the
+  new one is reported in its own section, with the base release's files that
+  mention the name. Findings add a warning to a pass. To fail the run on
+  them, use `--fail-on-probes`, or the action's `fail-on-probes` input. To
+  turn probes off, use `--no-probes`.
+- `EVIDENCE.md` includes the schema probe results. On Plane, the probes
+  flagged all 5 breaking migrations that replay missed, including 2 that the
+  earlier results counted as safe.
+
 ## v0.3.0 - 2026-10-25
 
 ### Added

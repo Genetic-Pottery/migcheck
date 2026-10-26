@@ -276,6 +276,9 @@ migcheck --repo /tmp/mc-demo --base v1 --head v2-rename \
 | `v2-notnull` | Adds `plan text NOT NULL` with no default | `FAIL` |
 | `v2-untested` | Drops `nickname`, which only untested code uses | `PASS WITH WARNING`, from a schema probe |
 
+For a demo on Supabase, with PostgREST and row-level security, see
+[Supabase](RECIPES.md#supabase) in `RECIPES.md`.
+
 ## How it works
 
 1. migcheck checks out the base and head refs into temporary git worktrees.

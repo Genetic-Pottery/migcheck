@@ -452,6 +452,10 @@ toggles, and deletes todos. Each run replayed 155 statements.
   schema probe flagged the dropped column, and the report named the one file
   that mentions it, `lib/todos.mjs`.
 
+To reproduce these runs, build the example with
+[`examples/make-supabase-demo.sh`](examples/make-supabase-demo.sh) and run the
+command in [RECIPES.md](RECIPES.md#supabase).
+
 Before 0.5.0, migcheck couldn't run on Supabase's image, because the image
 doesn't make `postgres` a superuser. Replay also skipped every write that
 came through PostgREST.

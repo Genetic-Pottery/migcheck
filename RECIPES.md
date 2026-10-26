@@ -353,9 +353,24 @@ migcheck --base v1.0.0 --head main \
 - The scripts use `docker run --network host`, which needs Linux or a Docker
   Desktop version with host networking turned on.
 
-Tested with Supabase's `nextjs-todo-list` example and four test migrations,
-on Supabase's Postgres 17 image. The scripts don't start the Storage server,
-so a workload that uploads files doesn't run.
+The scripts don't start the Storage server, so a workload that uploads files
+doesn't run.
+
+To try the setup, build the Supabase demo. It's the todo list from Supabase's
+`nextjs-todo-list` example, with one base release and four candidate
+releases. It needs Node.js and npm.
+
+```sh
+examples/make-supabase-demo.sh /tmp/mc-supabase-demo
+cd /tmp/mc-supabase-demo
+migcheck --base v1 --head v2-rls \
+  --image supabase/postgres:17.11.0.004 \
+  --migrate "npm ci && scripts/migcheck-migrate.sh" \
+  --workload "node scripts/migcheck-stack.mjs npm test"
+```
+
+For each release's result, see the
+[Supabase example](EVIDENCE.md#supabase-example) in `EVIDENCE.md`.
 
 ## Apps that migrate on startup
 

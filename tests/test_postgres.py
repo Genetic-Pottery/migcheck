@@ -119,13 +119,24 @@ class ParseLogTest(unittest.TestCase):
         ), exclude=set())
         self.assertEqual([s.sql for s in statements], ["SELECT '1', NULL"])
 
-    def test_drops_transaction_control_and_ddl(self):
+    def test_casts_postgrest_request_bodies_to_json(self):
+        # PostgREST binds the body as json. Inlined, it would be text.
+        statements = parse_log(log(
+            ("app", "a",
+             'execute 7: INSERT INTO "todos"("task") SELECT "pgrst_body"."task" FROM (SELECT $1 AS json_data) pgrst_payload, '
+             'LATERAL (SELECT "task" FROM json_to_record(pgrst_payload.json_data) AS _("task" text)) pgrst_body',
+             """Parameters: $1 = '{"task":"Write it"}'"""),
+        ), exclude=set())
+        self.assertIn("""(SELECT '{"task":"Write it"}'::json AS json_data)""", statements[0].sql)
+
+    def test_drops_transaction_control_ddl_and_deallocate(self):
         statements = parse_log(log(
             ("app", "a", "statement: start transaction"),
             ("app", "a", "statement: SAVEPOINT s"),
             ("app", "a", "statement: RELEASE s"),
             ("app", "a", "statement: SET CONSTRAINTS ALL DEFERRED"),
             ("app", "a", "statement: CREATE INDEX i ON t (x)"),
+            ("app", "a", 'statement: deallocate "pgx_0"'),
             ("app", "a", "statement: SELECT 1"),
             ("app", "a", "statement: end"),
         ), exclude=set())

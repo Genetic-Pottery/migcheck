@@ -377,6 +377,9 @@ and migcheck removes the container and worktrees when it finishes.
 - migcheck checks for errors, not wrong results. A query that returns
   different rows on the new schema passes.
 - On Postgres, replay ignores `SAVEPOINT` and `ROLLBACK TO SAVEPOINT`.
+- On Postgres, replay resets the role at the start of each transaction. A
+  role that an app sets once per connection, with `SET ROLE`, doesn't carry
+  into the connection's later transactions.
 - On MySQL, a workload that runs tests in parallel can leave replayed rows
   with different keys than the workload saw. Statements that reference those
   keys then fail on both schemas, and migcheck skips them.

@@ -36,6 +36,13 @@ const containers = []
 function stop() {
   for (const name of containers.splice(0)) execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' })
 }
+// Node skips `finally` when a signal ends it, so stop the containers here.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    stop()
+    process.exit(1)
+  })
+}
 
 function start(image, env, args = []) {
   const name = `migcheck-stack-${randomBytes(4).toString('hex')}`
@@ -111,7 +118,10 @@ try {
       SUPABASE_SERVICE_ROLE_KEY: sign({ role: 'service_role', iss: 'supabase' }),
     },
   })
-  exitCode = await new Promise((resolve) => child.on('exit', (code) => resolve(code ?? 1)))
+  exitCode = await new Promise((resolve, reject) => {
+    child.on('error', reject)
+    child.on('exit', (code) => resolve(code ?? 1))
+  })
 } finally {
   stop()
 }

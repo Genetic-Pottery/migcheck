@@ -177,10 +177,12 @@ class PostgresReplayTest(unittest.TestCase):
         ], setup=ROLE_SETUP + "INSERT INTO notes (owner) VALUES ('someone else');")
         self.assertEqual(results, [OK, OK])
 
-    def test_a_role_set_for_the_session_outlasts_replay(self):
+    def test_a_role_set_for_the_session_ends_with_its_block(self):
+        # Blocks from different sessions replay in turn, so the next block
+        # runs as the superuser, which row-level security doesn't limit.
         results = self.replay([
             Statement("SET ROLE replay_user", 0, True),
-            Statement("SELECT 1", 1, True),
+            Statement("INSERT INTO notes (owner) VALUES ('someone else')", 1, True),
         ], setup=ROLE_SETUP)
         self.assertEqual(results, [OK, OK])
 
@@ -240,6 +242,7 @@ RUN printf '%s\\n' \\
   "ALTER ROLE auth_server SET log_statement = none;" \\
   "ALTER ROLE auth_server IN DATABASE postgres SET log_statement = none;" \\
   "ALTER DATABASE postgres SET log_statement = none;" \\
+  "ALTER ROLE auth_server SET log_min_messages = fatal;" \\
   > /docker-entrypoint-initdb.d/set-up.sql
 CMD ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
 """
@@ -268,6 +271,7 @@ class SetUpImageTest(unittest.TestCase):
         self.assertEqual(setting.strip(), "pg_stat_statements")
 
     def test_logs_every_role(self):
+        self.db.record()
         settings = self.db._psql("postgres", "COPY (SELECT count(*) FROM pg_db_role_setting, unnest(setconfig) c "
                                              "WHERE c LIKE 'log%') TO STDOUT;")
         self.assertEqual(settings.strip(), "0")

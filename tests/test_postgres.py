@@ -129,14 +129,25 @@ class ParseLogTest(unittest.TestCase):
         ), exclude=set())
         self.assertIn("""(SELECT '{"task":"Write it"}'::json AS json_data)""", statements[0].sql)
 
-    def test_drops_transaction_control_ddl_and_deallocate(self):
+    def test_drops_deallocate_for_statements_prepared_over_the_protocol(self):
+        statements = parse_log(log(
+            ("app", "a", "execute pgx_0: SELECT 1"),
+            ("app", "a", 'statement: deallocate "pgx_0"'),
+            ("app", "a", "statement: PREPARE q AS SELECT 2"),
+            ("app", "a", "statement: DEALLOCATE q"),
+            ("app", "b", 'statement: deallocate "pgx_0"'),
+        ), exclude=set())
+        self.assertEqual([s.sql for s in statements], [
+            "SELECT 1", "PREPARE q AS SELECT 2", "DEALLOCATE q", 'deallocate "pgx_0"',
+        ])
+
+    def test_drops_transaction_control_and_ddl(self):
         statements = parse_log(log(
             ("app", "a", "statement: start transaction"),
             ("app", "a", "statement: SAVEPOINT s"),
             ("app", "a", "statement: RELEASE s"),
             ("app", "a", "statement: SET CONSTRAINTS ALL DEFERRED"),
             ("app", "a", "statement: CREATE INDEX i ON t (x)"),
-            ("app", "a", 'statement: deallocate "pgx_0"'),
             ("app", "a", "statement: SELECT 1"),
             ("app", "a", "statement: end"),
         ), exclude=set())

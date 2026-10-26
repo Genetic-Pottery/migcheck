@@ -11,6 +11,8 @@
 - `RECIPES.md` shows how to set up migcheck for Supabase, with scripts in
   `examples/supabase` that apply the Auth server's migrations and run the
   tests through PostgREST and the Auth server.
+- `EVIDENCE.md` includes the Supabase example, and says which Keycloak tests
+  the Keycloak runs leave out and why.
 - Replay applies the role and settings that PostgREST switches to in each
   request, so a migration that changes a row-level security policy can break
   replayed writes.

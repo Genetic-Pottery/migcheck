@@ -1,12 +1,18 @@
 # Test results
 
 These results come from running migcheck against real upgrades of open-source
-apps. Each run used the app's own test suite as the workload. The Postgres
-results and the BookStack results reflect migcheck 0.3.0. The MySQL results
-for Ghost, Gitea, and Keycloak reflect migcheck 0.2.0, because migcheck's
-MySQL replay hasn't changed since then. Rerunning the older Postgres results
-with 0.3.0 gave the same verdicts. When a release changes how migcheck
-records or replays queries, the affected results are rerun.
+apps. Each run used the app's own test suite as the workload.
+
+migcheck 0.5.0 reran every Postgres upgrade on this page: Plane's 25
+migrations and 23 upgrades of the other apps. Each run gave the same verdict
+and the same causes as before. Statement counts differed by up to 2% from the
+earlier runs, because test suites don't run exactly the same queries each
+time. The statement counts in the tables come from the earlier runs.
+
+The MySQL results for Ghost, Gitea, and Keycloak come from migcheck 0.2.0, and
+the BookStack results come from 0.3.0. migcheck's MySQL replay hasn't changed
+since then. When a release changes how migcheck records or replays queries,
+the affected results are rerun.
 
 | App | ORM | Database | Upgrades | Result |
 |---|---|---|---|---|
@@ -22,6 +28,10 @@ records or replays queries, the affected results are rerun.
 | Bitwarden | Entity Framework (.NET) | Postgres | 4 | Caught all 5 breaks |
 | Cal.com | Prisma (Node) | Postgres | 3 | Caught 1 of 2 breaks; schema probes flagged the other |
 | Outline | Sequelize (Node) | Postgres | 3 | Caught the 1 break |
+
+migcheck also ran on Supabase's todo-list example, which isn't in this table.
+The example isn't a production app, and its breaking releases were written
+for the test. For details, see [Supabase example](#supabase-example).
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
@@ -83,6 +93,18 @@ one-worker runs.
 migcheck replayed Keycloak's test suite for two upgrades, 26.6.0 to 26.7.0 and
 26.7.0 to 26.8.0, on both Postgres and MySQL. The four runs replayed about 14
 million statements in total. The largest run replayed 4.8 million.
+
+The workload ran the tests in Keycloak's `tests/base` module, except for two
+kinds:
+
+- `WelcomePageTest` deletes the admin account that the test framework signs
+  in with. Keycloak's default test database starts empty each time the test
+  server starts, but migcheck's database keeps its data. With this test
+  included, every later test failed to sign in.
+- The classes in `org.keycloak.tests.suites` rerun tests from other classes.
+
+The Maven test pattern was
+`org.keycloak.tests.**,!org.keycloak.tests.suites.**,!**/WelcomePageTest`.
 
 | Upgrade | Postgres | MySQL |
 |---|---|---|
@@ -394,6 +416,45 @@ were 36 to 54 statements per run, most of the statements that migcheck
 skipped.
 
 All server tests passed in each run.
+
+## Supabase example
+
+Supabase apps send most queries through PostgREST, which runs each request as
+the signed-in user's database role, so row-level security (RLS) policies
+apply. migcheck ran on Supabase's
+[`nextjs-todo-list`](https://github.com/supabase/supabase/tree/master/examples/todo-list/nextjs-todo-list)
+example to test the setup in [RECIPES.md](RECIPES.md#supabase). The example
+isn't a production app, and its four candidate releases were written for this
+test. These results show that the setup works, not how often migcheck catches
+breaks in Supabase apps.
+
+The runs used the versions that Supabase CLI 2.120.0 runs: the
+`supabase/postgres:17.11.0.004` image, PostgREST v16.4, and Supabase Auth
+v2.197.0. The workload was a test script that signs up two users with
+`supabase-js` and runs the example's queries as each of them: it lists, adds,
+toggles, and deletes todos. Each run replayed 155 statements.
+
+| Release | Migration | Result |
+|---|---|---|
+| `v2-expand` | Adds `todos.priority` | Pass |
+| `v2-rename` | Renames `todos.is_complete` to `done` | Fail |
+| `v2-rls` | Adds lists, and a policy that allows a new todo only in one of the user's lists | Fail |
+| `v2-untested` | Drops `todos.inserted_at`, which only an untested function reads | Pass with a warning |
+
+- `v2-rename` broke 1 statement, the update that toggles a todo. The reads
+  use `select('*')`, so they still work.
+- `v2-rls` broke the 3 inserts, with an RLS error. Replay runs each request as
+  the role PostgREST switched to. A workload that queries the database
+  directly as `postgres` doesn't catch this break, because that role bypasses
+  RLS. `v2-rls` gave the same result on the Postgres 15 image,
+  `supabase/postgres:15.19.0.004`.
+- `v2-untested` passed replay, because the tests never read `inserted_at`. A
+  schema probe flagged the dropped column, and the report named the one file
+  that mentions it, `lib/todos.mjs`.
+
+Before 0.5.0, migcheck couldn't run on Supabase's image, because the image
+doesn't make `postgres` a superuser. Replay also skipped every write that
+came through PostgREST.
 
 ## Schema probes
 

@@ -321,6 +321,42 @@ migcheck --base v1.0.0 --head main \
 
 Tested with Bitwarden server on Postgres.
 
+## Supabase
+
+Copy the scripts in [examples/supabase](examples/supabase) into your
+project, then run:
+
+```sh
+migcheck --base v1.0.0 --head main \
+  --image supabase/postgres:17.11.0.004 \
+  --migrate "npm ci && scripts/migcheck-migrate.sh" \
+  --workload "node scripts/migcheck-stack.mjs npm test"
+```
+
+- `migcheck-migrate.sh` applies the Auth server's migrations and then
+  `supabase/migrations`, as `supabase start` does. Without the Auth server's
+  migrations, `auth.uid()` reads an older JWT setting, and every RLS check
+  fails.
+- `migcheck-stack.mjs` starts PostgREST, the Auth server, and a gateway on
+  `DATABASE_URL`, then runs your tests with `SUPABASE_URL`,
+  `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` set. Your tests must
+  read these variables instead of pointing at `supabase start`.
+- Use the image versions your Supabase CLI runs, in `--image` and in both
+  scripts. To list them, run `supabase start` and then `docker ps`.
+- Run the queries you want checked through PostgREST, with `supabase-js`.
+  PostgREST switches to the signed-in user's role, and replay does the same,
+  so a migration that changes an RLS policy can break the replayed writes.
+  Queries that tests run directly as `postgres` skip RLS, because the role
+  bypasses it.
+- A policy change that only hides rows raises no error, so migcheck doesn't
+  catch it.
+- The scripts use `docker run --network host`, which needs Linux or a Docker
+  Desktop version with host networking turned on.
+
+Tested with Supabase's `nextjs-todo-list` example and four test migrations,
+on Supabase's Postgres 17 image. The scripts don't start the Storage server,
+so a workload that uploads files doesn't run.
+
 ## Apps that migrate on startup
 
 Some apps, such as Keycloak and many Spring Boot apps with Flyway or

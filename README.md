@@ -74,6 +74,8 @@ including the following:
 - New `NOT NULL` columns without a database default. The old release's inserts
   don't set them.
 - New constraints that the old release's writes violate.
+- Row-level security policies that the old release's writes violate, when
+  the app switches to the user's role, as Supabase's PostgREST does.
 - Changed column types that the old release's values don't fit.
 
 The `NOT NULL` case is easy to miss in Django. When a migration adds a field
@@ -131,8 +133,8 @@ migcheck --base v1.4.0 --head main \
 ```
 
 For Rails, SQLAlchemy, Go, Node, Prisma, Sequelize, Rust, Elixir, Laravel,
-Entity Framework, and apps that migrate on startup, and for apps that don't read
-`DATABASE_URL`, see [RECIPES.md](RECIPES.md).
+Entity Framework, Supabase, and apps that migrate on startup, and for apps that
+don't read `DATABASE_URL`, see [RECIPES.md](RECIPES.md).
 
 migcheck exits with one of the following codes:
 

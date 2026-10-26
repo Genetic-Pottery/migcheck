@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- migcheck runs on Supabase's Postgres image, and on other images where
+  `postgres` isn't a superuser or where the image's init scripts set up the
+  `postgres` database. migcheck keeps the image's server command and config,
+  runs its own SQL as the image's superuser, and starts its databases from a
+  copy of the `postgres` database.
+- `RECIPES.md` shows how to set up migcheck for Supabase, with scripts in
+  `examples/supabase` that apply the Auth server's migrations and run the
+  tests through PostgREST and the Auth server.
+- Replay applies the role and settings that PostgREST switches to in each
+  request, so a migration that changes a row-level security policy can break
+  replayed writes.
+
+### Fixed
+
+- Replay skipped every write that came through PostgREST, because the
+  request body lost its `json` type when migcheck inlined it.
+- Replay dropped statements from roles and databases that turn
+  `log_statement` off, as Supabase's Auth and Storage roles do.
+- Replay failed on `DEALLOCATE`, which drivers such as Go's pgx send for
+  prepared statements that replay never creates.
+- A replayed `SET ROLE` broke replay when the role couldn't read migcheck's
+  own schema.
+
 ## v0.4.0 - 2026-10-25
 
 ### Added

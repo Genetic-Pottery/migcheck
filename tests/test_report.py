@@ -294,6 +294,12 @@ class ProbeReportTest(unittest.TestCase):
         self.assertIn("    agents.address: the probe fails on the old schema too: [P0001] no\n"
                       "        v1 inserts into agents without address in 1 file: supabase/functions/sync.ts (agent_id).\n",
                       out)
+        self.assertIn("PASS WITH WARNING: all 1 statements from v1 still work after v2's migrations, "
+                      "but v1 has inserts that leave out 1 column that v2 requires.", out)
+        self.assertIn("To fail the run on these inserts and on schema probes, use --fail-on-probes.", out)
+        code, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], unchecked=unchecked, fail_on_probes=True)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL: all 1 statements from v1 still work", out)
 
     def test_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:

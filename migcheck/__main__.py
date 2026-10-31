@@ -46,7 +46,8 @@ def main():
     )
     parser.add_argument(
         "--fail-on-probes", action="store_true",
-        help="exit with code 1 when a schema probe fails, even if every recorded statement still works",
+        help="exit with code 1 when a schema probe fails, or when an insert leaves out a column that a change "
+             "migcheck couldn't probe requires, even if every recorded statement still works",
     )
     parser.add_argument("--no-probes", action="store_true", help="don't generate schema probes")
     args = parser.parse_args()
@@ -198,7 +199,12 @@ def report(db, base, head, statements, old, new, workload_exit, head_name=None, 
         reasons.append(f"the workload exited with code {workload_exit}")
     if found:
         reasons.append(f"{_plural(len(found), 'schema probe')} {'fails' if len(found) == 1 else 'fail'} on {head}'s schema")
-    probes_fail = bool(found) and fail_on_probes
+    # A change that migcheck couldn't probe still breaks the base release
+    # when the base release's inserts leave out the column it now requires.
+    breaking = _breaking_inserts(unchecked)
+    if breaking:
+        reasons.append(f"{base} has inserts that leave out {_plural(len(breaking), 'column')} that {head} requires")
+    probes_fail = bool(found or breaking) and fail_on_probes
     if not roots and reasons:
         print(f"{'FAIL' if probes_fail else 'PASS WITH WARNING'}: all {checked} statements from {base} still work "
               f"after {head}'s migrations, but {' and '.join(reasons)}.")
@@ -325,6 +331,10 @@ def _mention(base, finding, quote="", files=None):
     return f"{base} mentions {word}{also} in {_plural(finding.mentions, 'file')}: {', '.join(shown)}{more}."
 
 
+def _breaking_inserts(unchecked):
+    return [u for u in unchecked if u.finding and u.finding.inserts]
+
+
 def _others(finding):
     listed = ", ".join(f"{column} ({kind})" for column, kind in finding.others)
     return f"The table has more columns that now need a value: {listed}."
@@ -362,6 +372,8 @@ def _print_probes(base, head, found, unchecked, fail_on_probes):
                 print(f"        {_mention(base, u.finding)}")
         if len(unchecked) > 10:
             print(f"    and {len(unchecked) - 10} more")
+        if _breaking_inserts(unchecked) and not found and not fail_on_probes:
+            print("To fail the run on these inserts and on schema probes, use --fail-on-probes.")
 
 
 def _markdown_probes(base, head_md, found, unchecked, fail_on_probes):

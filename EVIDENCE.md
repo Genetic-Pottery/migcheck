@@ -493,7 +493,7 @@ workaround, see [Supabase](RECIPES.md#supabase) in `RECIPES.md`.
   parent row it inserts on both schemas. The report listed the change under
   the changes migcheck couldn't probe, with the insert that breaks:
   `supabase/functions/slack-management/sync.ts (organization_id,
-  conversation_id, agent_id)`. The verdict was a pass.
+  conversation_id, agent_id)`. The verdict was a pass with a warning.
 - paynless-framework: the probe failed with `23502`, and the report named
   `supabase/functions/dialectic-service/startSession.ts` with the columns its
   insert sets. It also listed `cloneProject.ts`, whose insert columns aren't

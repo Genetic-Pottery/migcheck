@@ -176,7 +176,7 @@ migrations when `SKIP_POST_DEPLOYMENT_MIGRATIONS` is set.
 | `--head-name` | Name to show for `--head` in the result, such as `this pull request`. |
 | `--markdown` | Also write the result as Markdown to this path, for a pull request comment. |
 | `--require-workload-success` | Exit with code `2` if the workload command fails, instead of checking the queries it ran. |
-| `--fail-on-probes` | Exit with code `1` when a schema probe fails, even if every recorded statement still works. |
+| `--fail-on-probes` | Exit with code `1` when a schema probe fails, or when an insert leaves out a column that a change migcheck couldn't probe requires, even if every recorded statement still works. |
 | `--no-probes` | Don't generate schema probes. |
 | `--version` | Print migcheck's version and exit. |
 
@@ -240,7 +240,7 @@ The action takes the following inputs:
 | `db` | `postgres` or `mysql`. Default: `postgres` |
 | `image` | Database Docker image. Default: `postgres:17-alpine` or `mysql:8.4` |
 | `require-workload-success` | Whether a failing workload command is an error. Default: `false` |
-| `fail-on-probes` | Whether a failing schema probe fails the job. Default: `false` |
+| `fail-on-probes` | Whether a failing schema probe, or an insert that leaves out a column a change migcheck couldn't probe requires, fails the job. Default: `false` |
 | `working-directory` | Directory of the repository to check. Default: `.` |
 | `comment` | Whether to post a pull request comment. Default: `true` |
 | `comment-key` | Keeps comments separate when a workflow runs migcheck more than once. Default: `default` |
@@ -367,8 +367,8 @@ sets. A new column can't appear in the base release, so a search for its name
 finds nothing. migcheck finds SQL `INSERT INTO` statements and query builder
 calls such as supabase-js's `.from("reminders").insert({ ... })`. The report
 lists these inserts for changes that migcheck couldn't probe, too, such as a
-probe whose parent row an app trigger rejects. It doesn't
-find inserts through an ORM model, such as Django's `objects.create()`. It
+probe whose parent row an app trigger rejects. Those inserts add a warning to a
+pass, like a finding does. It doesn't find inserts through an ORM model, such as Django's `objects.create()`. It
 can't tell an insert the code runs from an example in a string, such as SQL
 in a prompt.
 

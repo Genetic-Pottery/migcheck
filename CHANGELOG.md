@@ -12,7 +12,8 @@
   report lists the base release's inserts into the table that leave the
   column out. Before, it searched for the column's name, which a new column
   can't have in the base release, so the search found nothing. The report
-  lists these inserts for changes that migcheck couldn't probe, too.
+  lists these inserts for changes that migcheck couldn't probe, too, and
+  they add a warning to a pass. With `--fail-on-probes`, they fail the run.
 - `examples/supabase/migcheck-migrate.sh` applies the Storage server's
   migrations, so migrations that create buckets in `storage.buckets` run.
 - `RECIPES.md` describes a workaround for migrations that create the

@@ -223,7 +223,7 @@ class SearchTest(unittest.TestCase):
             files = {
                 "supabase/functions/remind/index.ts": "admin.from('reminders').insert({ todo_id, remind_at })",
                 "src/lib/reminders.ts": "supabase.from('reminders').insert({ todo_id, channel })",
-                "test/reminders.test.ts": "INSERT INTO reminders (todo_id) VALUES (1)",
+                "e2e/fixtures/seed.ts": "INSERT INTO reminders (todo_id) VALUES (1)",
                 "src/other.ts": "supabase.from('todos').insert({ task })",
                 "supabase/migrations/2_channel.sql": "INSERT INTO reminders (todo_id) VALUES (1)",
             }
@@ -237,7 +237,7 @@ class SearchTest(unittest.TestCase):
             probes.search(root, [finding, other])
         self.assertEqual(finding.inserts, [
             ("supabase/functions/remind/index.ts", ("todo_id", "remind_at")),
-            ("test/reminders.test.ts", ("todo_id",)),
+            ("e2e/fixtures/seed.ts", ("todo_id",)),
         ])
         self.assertEqual(finding.insert_files, 2)
         self.assertEqual(other.inserts, [])

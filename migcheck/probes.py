@@ -422,4 +422,4 @@ def search(root, found, limit=3):
 
 
 def _is_test(path):
-    return bool(re.search(r"(^|/)(tests?|spec|__tests__)(/|$)|[._-](test|spec)\.", path))
+    return bool(re.search(r"(^|/)(tests?|spec|__tests__|e2e|fixtures?)(/|$)|[._-](test|spec)\.", path))

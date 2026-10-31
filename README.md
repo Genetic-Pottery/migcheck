@@ -366,7 +366,9 @@ insert into the table that leaves the column out, with the columns the insert
 sets. A new column can't appear in the base release, so a search for its name
 finds nothing. migcheck finds SQL `INSERT INTO` statements and query builder
 calls such as supabase-js's `.from("reminders").insert({ ... })`. It doesn't
-find inserts through an ORM model, such as Django's `objects.create()`.
+find inserts through an ORM model, such as Django's `objects.create()`. It
+can't tell an insert the code runs from an example in a string, such as SQL
+in a prompt.
 
 Everything runs locally. The database container listens only on `127.0.0.1`,
 and migcheck removes the container and worktrees when it finishes.

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `examples/supabase/migcheck-stack.mjs` starts the Edge Runtime when the
+  project has `supabase/functions`, so tests can call edge functions and
+  migcheck replays their queries. The Supabase demo has an edge function and a
+  `v2-edge` release that breaks it.
+
 ## v0.5.0 - 2026-10-26
 
 ### Added

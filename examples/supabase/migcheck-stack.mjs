@@ -1,13 +1,20 @@
-// Starts PostgREST, the Auth server, and a gateway on $DATABASE_URL, as
-// `supabase start` does, then runs the command in the arguments with
-// SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY set.
+// Starts PostgREST, the Auth server, the Edge Runtime, and a gateway on
+// $DATABASE_URL, as `supabase start` does, then runs the command in the
+// arguments with SUPABASE_URL, SUPABASE_ANON_KEY, and
+// SUPABASE_SERVICE_ROLE_KEY set. The Edge Runtime serves supabase/functions,
+// if it exists, at /functions/v1.
 import { execFileSync, spawn } from 'node:child_process'
 import { createHmac, randomBytes } from 'node:crypto'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 const POSTGREST = 'postgrest/postgrest:v16.4'
 const AUTH = 'supabase/gotrue:v2.197.0'
+const EDGE_RUNTIME = 'supabase/edge-runtime:v1.77.4'
+const FUNCTIONS = path.resolve('supabase/functions')
 const JWT_SECRET = randomBytes(32).toString('hex')
 
 function urlAs(role) {
@@ -44,9 +51,10 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
   })
 }
 
-function start(image, env, args = []) {
+function start(image, env, args = [], volumes = []) {
   const name = `migcheck-stack-${randomBytes(4).toString('hex')}`
   const flags = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`])
+  for (const volume of volumes) flags.push('-v', volume)
   execFileSync('docker', ['run', '-d', '--rm', '--name', name, '--network', 'host', ...flags, image, ...args], { stdio: 'ignore' })
   containers.push(name)
 }
@@ -61,8 +69,47 @@ async function waitFor(url) {
   throw new Error(`${url} didn't respond in 20 seconds`)
 }
 
-const [restPort, authPort, gatewayPort] = await Promise.all([freePort(), freePort(), freePort()])
+// Routes /functions/v1/<name> to supabase/functions/<name>, as the CLI's main
+// service does. Unlike the CLI's, it doesn't verify the JWT.
+const MAIN_SERVICE = `
+Deno.serve(async (req) => {
+  const url = new URL(req.url)
+  const name = url.pathname.split('/')[1]
+  if (!name) return new Response('missing function name', { status: 400 })
+  try {
+    const worker = await EdgeRuntime.userWorkers.create({
+      servicePath: '/home/deno/functions/' + name,
+      memoryLimitMb: 256,
+      workerTimeoutMs: 60000,
+      noModuleCache: false,
+      envVars: Object.entries(Deno.env.toObject()),
+      forceCreate: false,
+      cpuTimeSoftLimitMs: 10000,
+      cpuTimeHardLimitMs: 20000,
+    })
+    return await worker.fetch(req)
+  } catch (e) {
+    return new Response(String(e), { status: 500 })
+  }
+})
+`
+
+async function waitForPort(port) {
+  for (let i = 0; i < 100; i++) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/`)
+      return
+    } catch {}
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  throw new Error(`port ${port} didn't respond in 20 seconds`)
+}
+
+const [restPort, authPort, functionsPort, gatewayPort] = await Promise.all([freePort(), freePort(), freePort(), freePort()])
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`
+const anonKey = sign({ role: 'anon', iss: 'supabase' })
+const serviceRoleKey = sign({ role: 'service_role', iss: 'supabase' })
+const mainDir = mkdtempSync(path.join(tmpdir(), 'migcheck-stack-'))
 let exitCode = 1
 try {
   start(POSTGREST, {
@@ -88,8 +135,27 @@ try {
     GOTRUE_MAILER_AUTOCONFIRM: true,
   })
 
-  // Routes /rest/v1 and /auth/v1 as Supabase's API gateway does.
+  const ready = [waitFor(`http://127.0.0.1:${restPort}/`), waitFor(`http://127.0.0.1:${authPort}/health`)]
+  // Routes /rest/v1, /auth/v1, and /functions/v1 as Supabase's API gateway
+  // does.
   const routes = { '/rest/v1': restPort, '/auth/v1': authPort }
+  if (existsSync(FUNCTIONS)) {
+    writeFileSync(path.join(mainDir, 'index.ts'), MAIN_SERVICE)
+    start(
+      EDGE_RUNTIME,
+      {
+        SUPABASE_URL: gatewayUrl,
+        SUPABASE_ANON_KEY: anonKey,
+        SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
+        SUPABASE_DB_URL: process.env.DATABASE_URL,
+      },
+      ['start', '--main-service', '/home/deno/main', '--port', functionsPort],
+      [`${mainDir}:/home/deno/main:ro`, `${FUNCTIONS}:/home/deno/functions:ro`],
+    )
+    routes['/functions/v1'] = functionsPort
+    // The main service answers 400 when no function is named.
+    ready.push(waitForPort(functionsPort))
+  }
   const gateway = http.createServer((req, res) => {
     const prefix = Object.keys(routes).find((p) => req.url.startsWith(p))
     if (!prefix) return res.writeHead(404).end()
@@ -106,7 +172,7 @@ try {
   await new Promise((resolve) => gateway.listen(gatewayPort, '127.0.0.1', resolve))
   gateway.unref()
 
-  await Promise.all([waitFor(`http://127.0.0.1:${restPort}/`), waitFor(`http://127.0.0.1:${authPort}/health`)])
+  await Promise.all(ready)
 
   const [command, ...args] = process.argv.slice(2)
   const child = spawn(command, args, {
@@ -114,8 +180,8 @@ try {
     env: {
       ...process.env,
       SUPABASE_URL: gatewayUrl,
-      SUPABASE_ANON_KEY: sign({ role: 'anon', iss: 'supabase' }),
-      SUPABASE_SERVICE_ROLE_KEY: sign({ role: 'service_role', iss: 'supabase' }),
+      SUPABASE_ANON_KEY: anonKey,
+      SUPABASE_SERVICE_ROLE_KEY: serviceRoleKey,
     },
   })
   exitCode = await new Promise((resolve, reject) => {
@@ -124,5 +190,6 @@ try {
   })
 } finally {
   stop()
+  rmSync(mainDir, { recursive: true, force: true })
 }
 process.exit(exitCode)

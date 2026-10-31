@@ -423,16 +423,18 @@ Supabase apps send most queries through PostgREST, which runs each request as
 the signed-in user's database role, so row-level security (RLS) policies
 apply. migcheck ran on Supabase's
 [`nextjs-todo-list`](https://github.com/supabase/supabase/tree/master/examples/todo-list/nextjs-todo-list)
-example to test the setup in [RECIPES.md](RECIPES.md#supabase). The example
-isn't a production app, and its four candidate releases were written for this
-test. These results show that the setup works, not how often migcheck catches
+example to test the setup in [RECIPES.md](RECIPES.md#supabase), with an edge
+function added. The example isn't a production app, and its five candidate
+releases were written for this test. These results show that the setup works, not how often migcheck catches
 breaks in Supabase apps.
 
 The runs used the versions that Supabase CLI 2.120.0 runs: the
-`supabase/postgres:17.11.0.004` image, PostgREST v16.4, and Supabase Auth
-v2.197.0. The workload was a test script that signs up two users with
-`supabase-js` and runs the example's queries as each of them: it lists, adds,
-toggles, and deletes todos. Each run replayed 155 statements.
+`supabase/postgres:17.11.0.004` image, PostgREST v16.4, Supabase Auth
+v2.197.0, and Edge Runtime v1.77.4. The workload was a test script that signs
+up two users with `supabase-js` and runs the example's queries as each of
+them: it lists, adds, toggles, and deletes todos. It also calls the `remind`
+edge function, which checks that the caller owns the todo and then inserts a
+reminder as `service_role`. Each run replayed 161 statements.
 
 | Release | Migration | Result |
 |---|---|---|
@@ -440,6 +442,7 @@ toggles, and deletes todos. Each run replayed 155 statements.
 | `v2-rename` | Renames `todos.is_complete` to `done` | Fail |
 | `v2-rls` | Adds lists, and a policy that allows a new todo only in one of the user's lists | Fail |
 | `v2-untested` | Drops `todos.inserted_at`, which only an untested function reads | Pass with a warning |
+| `v2-edge` | Adds `reminders.channel`, `NOT NULL`, and sets it in the `remind` function | Fail |
 
 - `v2-rename` broke 1 statement, the update that toggles a todo. The reads
   use `select('*')`, so they still work.
@@ -447,10 +450,14 @@ toggles, and deletes todos. Each run replayed 155 statements.
   the role PostgREST switched to. A workload that queries the database
   directly as `postgres` doesn't catch this break, because that role bypasses
   RLS. `v2-rls` gave the same result on the Postgres 15 image,
-  `supabase/postgres:15.19.0.004`.
+  `supabase/postgres:15.19.0.004`. The report also listed the reminder insert
+  as a later failure, because the todo that it references didn't exist.
 - `v2-untested` passed replay, because the tests never read `inserted_at`. A
   schema probe flagged the dropped column, and the report named the one file
   that mentions it, `lib/todos.mjs`.
+- `v2-edge` broke 1 statement, the old `remind` function's insert, which
+  doesn't set `channel`. This is the break that a deploy causes when the
+  migrations run before the old function's workers stop.
 
 To reproduce these runs, build the example with
 [`examples/make-supabase-demo.sh`](examples/make-supabase-demo.sh) and run the

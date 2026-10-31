@@ -341,8 +341,17 @@ migcheck --base v1.0.0 --head main \
   `DATABASE_URL`, then runs your tests with `SUPABASE_URL`,
   `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` set. Your tests must
   read these variables instead of pointing at `supabase start`.
+- If your project has `supabase/functions`, `migcheck-stack.mjs` also starts
+  the Edge Runtime and serves each function at `/functions/v1/<name>`, as
+  `supabase start` does. The functions get the same variables, plus
+  `SUPABASE_DB_URL`. Unlike `supabase start`, the gateway doesn't verify the
+  JWT before it calls a function.
+- To check edge functions, call them from your tests. During a deploy, the
+  workers that run the old functions keep serving requests after the new
+  migrations run. migcheck replays the queries that the base release's
+  functions made, whether they went through PostgREST or connected directly.
 - Use the image versions your Supabase CLI runs, in `--image` and in both
-  scripts. To list them, run `supabase start` and then `docker ps`.
+  scripts. This includes the Edge Runtime version. To list them, run `supabase start` and then `docker ps`.
 - Run the queries you want checked through PostgREST, with `supabase-js`.
   PostgREST switches to the signed-in user's role, and replay does the same,
   so a migration that changes an RLS policy can break the replayed writes.
@@ -357,8 +366,9 @@ The scripts don't start the Storage server, so a workload that uploads files
 doesn't run.
 
 To try the setup, build the Supabase demo. It's the todo list from Supabase's
-`nextjs-todo-list` example, with one base release and four candidate
-releases. It needs Node.js and npm.
+`nextjs-todo-list` example plus an edge function, with one base release and
+five candidate releases. It needs Node.js and npm. The edge function loads
+`supabase-js` from npm, so the workload needs network access.
 
 ```sh
 examples/make-supabase-demo.sh /tmp/mc-supabase-demo

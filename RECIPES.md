@@ -367,11 +367,12 @@ The scripts don't start the Storage server, so a workload that uploads files
 doesn't run.
 
 Supabase's image allows `pg_cron` only in the `postgres` database, and
-migcheck migrates into a database of its own. So a migration that runs
-`create extension pg_cron` fails. To work around it, remove that line from
-the checkout's migrations in your migrate command, and create no-op
-`cron.schedule` and `cron.unschedule` functions in a `cron` schema first.
-Jobs don't run during a migcheck run, so the stubs don't change the result.
+migcheck migrates into a database of its own. So for migrations that use
+`pg_cron`, `migcheck-migrate.sh` applies a copy of them without their
+`create extension` and `drop extension` statements for it. It creates a
+`cron` schema whose `schedule`, `unschedule`, and `alter_job` functions record
+jobs in `cron.job` without running them. Jobs don't run during a migcheck run
+either way. Your checkout's migrations aren't changed.
 
 To try the setup, build the Supabase demo. It's the todo list from Supabase's
 `nextjs-todo-list` example plus an edge function, with one base release and

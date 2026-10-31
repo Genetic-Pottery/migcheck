@@ -479,9 +479,10 @@ could find the breaks.
 
 The commits came from a search of GitHub for Supabase projects with edge
 functions and such migrations. Each run used `supabase/postgres:17.11.0.004`
-and a migrate command that removed `create extension pg_cron` and comments on
-Auth's tables, which today's image doesn't allow. For the `pg_cron`
-workaround, see [Supabase](RECIPES.md#supabase) in `RECIPES.md`.
+and the scripts in `examples/supabase`, which handle `pg_cron`. For details,
+see [Supabase](RECIPES.md#supabase) in `RECIPES.md`. For paynless-framework,
+the migrate command also removed comments on Auth's tables, which `postgres`
+doesn't own on today's image.
 
 | Project | Commit | Migration | Result |
 |---|---|---|---|

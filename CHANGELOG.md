@@ -16,8 +16,10 @@
   they add a warning to a pass. With `--fail-on-probes`, they fail the run.
 - `examples/supabase/migcheck-migrate.sh` applies the Storage server's
   migrations, so migrations that create buckets in `storage.buckets` run.
-- `RECIPES.md` describes a workaround for migrations that create the
-  `pg_cron` extension.
+- `examples/supabase/migcheck-migrate.sh` handles migrations that use
+  `pg_cron`, which Supabase's image allows only in the `postgres` database.
+  It applies a copy of them without `create extension pg_cron`, and creates
+  `cron` functions that record jobs without running them.
 
 ## v0.5.0 - 2026-10-26
 

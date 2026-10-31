@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds a Supabase demo git repo with one base release and five candidate
 # releases. v1 is the todo list from Supabase's nextjs-todo-list example, plus
-# a remind edge function:
+# a remind edge function and a pg_cron job that purges past reminders:
 #   v2-expand   adds todos.priority (safe)
 #   v2-rename   renames todos.is_complete to done (breaks v1's update)
 #   v2-rls      lets users add todos only to their own lists (breaks v1's
@@ -81,6 +81,10 @@ create table reminders (
 );
 -- Only the remind function, as service_role, reads and writes reminders.
 alter table reminders enable row level security;
+
+create extension if not exists pg_cron with schema pg_catalog;
+select cron.schedule('purge-past-reminders', '0 3 * * *',
+  $$delete from reminders where remind_at < now() - interval '30 days'$$);
 EOF
 
 cat > supabase/functions/remind/index.ts <<'EOF'

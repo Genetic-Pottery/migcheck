@@ -51,6 +51,17 @@ class Finding:
     insert_files: int = 0
 
 
+@dataclass
+class Unchecked:
+    """A change that migcheck couldn't probe."""
+    name: str
+    reason: str
+    # For a column that now requires a value, a stand-in finding that
+    # search() fills in with the base release's inserts that leave it out.
+    # Those inserts still show what breaks when the probe can't.
+    finding: Finding = None
+
+
 def short(qualified):
     """Drops the schema from "schema.table" when it's the default one."""
     schema, _, name = qualified.partition(".")
@@ -59,8 +70,8 @@ def short(qualified):
 
 def generate(old, new, dialect):
     """Returns (probes, skipped) for the changes from catalog `old` to catalog
-    `new`. `skipped` lists (name, reason) for changes that migcheck couldn't
-    write a probe for."""
+    `new`. `skipped` lists an Unchecked for each change that migcheck
+    couldn't write a probe for."""
     probes, skipped = [], []
     old_rels, new_rels = old["relations"], new["relations"]
     for key, rel in old_rels.items():
@@ -95,7 +106,11 @@ def generate(old, new, dialect):
                 try:
                     statements = dialect.insert(plan(old, key, dialect, set_too))
                 except ProbeError as e:
-                    skipped.extend((f"{short(key)}.{c}", str(e)) for c in kinds)
+                    skipped.extend(
+                        Unchecked(f"{short(key)}.{c}", str(e),
+                                  Finding(Probe(f"{short(key)}.{c}", kind, [], (rel["name"], c)), "", ""))
+                        for c, kind in kinds.items()
+                    )
                 else:
                     probes.append(Probe(f"{short(key)}.{first}", kinds[first], statements, (rel["name"], first), kinds))
     new_funcs = set(new["functions"])
@@ -221,7 +236,10 @@ def findings(probes, old, new, known, cause):
         pos += n
         failed_old = next(((st, msg) for st, msg in old_results if st is not None), None)
         if failed_old:
-            unchecked.append((p.name, f"the probe fails on the old schema too: [{failed_old[0]}] {failed_old[1]}"))
+            unchecked.append(Unchecked(
+                p.name, f"the probe fails on the old schema too: [{failed_old[0]}] {failed_old[1]}",
+                Finding(p, "", "") if p.kinds else None,
+            ))
             continue
         failed = next(((sql, st, msg) for sql, (st, msg) in zip(p.statements, new_results) if st is not None), None)
         if failed:

@@ -125,7 +125,7 @@ class GenerateTest(unittest.TestCase):
         new = catalog({"events": ("r", [*tables["events"][1], col("x", "text", notnull=True)])}, fks)
         found, skipped = probes.generate(catalog(tables, fks), new, Dialect)
         self.assertEqual(found, [])
-        self.assertEqual(skipped, [("events.x", "it references parts_1, which migcheck doesn't read, such as a partition")])
+        self.assertEqual([(u.name, u.reason) for u in skipped], [("events.x", "it references parts_1, which migcheck doesn't read, such as a partition")])
 
     def test_names_relations_in_other_schemas(self):
         old = catalog({})
@@ -155,7 +155,7 @@ class GenerateTest(unittest.TestCase):
         new = catalog({"nodes": ("r", [*tables["nodes"][1], col("x", notnull=True)])}, fks)
         found, skipped = probes.generate(catalog(tables, fks), new, Dialect)
         self.assertEqual(found, [])
-        self.assertEqual(skipped, [("nodes.x", "its required foreign keys form a cycle")])
+        self.assertEqual([(u.name, u.reason) for u in skipped], [("nodes.x", "its required foreign keys form a cycle")])
 
     def test_dropped_function(self):
         funcs = {"public.score(integer, text)": {"schema": "public", "name": "score", "args": ["integer", "text"]}}
@@ -241,6 +241,18 @@ class SearchTest(unittest.TestCase):
         ])
         self.assertEqual(finding.insert_files, 2)
         self.assertEqual(other.inserts, [])
+
+    def test_unchecked_insert_probes_keep_a_stand_in(self):
+        probe = probes.Probe("agents.address", probes.NEW_COLUMN, ["INSERT parent", "INSERT"], ("agents", "address"),
+                             {"address": probes.NEW_COLUMN})
+        dropped = probes.Probe("agents.old", "column dropped", ["SELECT"], ("agents", "old"))
+        trigger = ("P0001", "conversations need an address")
+        found, unchecked = probes.findings([probe, dropped], [trigger, (None, None), trigger],
+                                           [trigger, (None, None), trigger], set(), lambda msg, sql: None)
+        self.assertEqual(found, [])
+        self.assertEqual([u.name for u in unchecked], ["agents.address", "agents.old"])
+        self.assertIs(unchecked[0].finding.probe, probe)
+        self.assertIsNone(unchecked[1].finding)
 
 
 @unittest.skipUnless(have_docker(), "needs Docker")

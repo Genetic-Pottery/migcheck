@@ -333,10 +333,11 @@ migcheck --base v1.0.0 --head main \
   --workload "node scripts/migcheck-stack.mjs npm test"
 ```
 
-- `migcheck-migrate.sh` applies the Auth server's migrations and then
-  `supabase/migrations`, as `supabase start` does. Without the Auth server's
-  migrations, `auth.uid()` reads an older JWT setting, and every RLS check
-  fails.
+- `migcheck-migrate.sh` applies the Auth and Storage servers' migrations and
+  then `supabase/migrations`, as `supabase start` does. Without the Auth
+  server's migrations, `auth.uid()` reads an older JWT setting, and every RLS
+  check fails. Without the Storage server's, migrations that create buckets
+  in `storage.buckets` fail.
 - `migcheck-stack.mjs` starts PostgREST, the Auth server, and a gateway on
   `DATABASE_URL`, then runs your tests with `SUPABASE_URL`,
   `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` set. Your tests must
@@ -364,6 +365,13 @@ migcheck --base v1.0.0 --head main \
 
 The scripts don't start the Storage server, so a workload that uploads files
 doesn't run.
+
+Supabase's image allows `pg_cron` only in the `postgres` database, and
+migcheck migrates into a database of its own. So a migration that runs
+`create extension pg_cron` fails. To work around it, remove that line from
+the checkout's migrations in your migrate command, and create no-op
+`cron.schedule` and `cron.unschedule` functions in a `cron` schema first.
+Jobs don't run during a migcheck run, so the stubs don't change the result.
 
 To try the setup, build the Supabase demo. It's the todo list from Supabase's
 `nextjs-todo-list` example plus an edge function, with one base release and

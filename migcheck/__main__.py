@@ -110,8 +110,12 @@ def main():
             probe_list, old_probes, new_probes, {cause for cause, _ in groups if cause}, db.cause
         )
         unchecked += failed_on_old
-        if found:
-            probes.search(base_dir, found)
+        stand_ins = [u.finding for u in unchecked if u.finding]
+        if found or stand_ins:
+            probes.search(base_dir, found + stand_ins)
+        # Changes with inserts that break come first, so the report's limit
+        # doesn't hide them.
+        unchecked.sort(key=lambda u: not (u.finding and u.finding.inserts))
     except Exception as e:  # Exit code 1 means a query breaks, so nothing else may use it.
         fail(f"{type(e).__name__}: {e}")
     finally:
@@ -352,8 +356,10 @@ def _print_probes(base, head, found, unchecked, fail_on_probes):
             print()
     if unchecked:
         print(f"migcheck couldn't probe {_plural(len(unchecked), 'change')}:")
-        for name, reason in unchecked[:10]:
-            print(f"    {name}: {reason[:200]}")
+        for u in unchecked[:10]:
+            print(f"    {u.name}: {u.reason[:200]}")
+            if u.finding and u.finding.inserts:
+                print(f"        {_mention(base, u.finding)}")
         if len(unchecked) > 10:
             print(f"    and {len(unchecked) - 10} more")
 
@@ -385,8 +391,10 @@ def _markdown_probes(base, head_md, found, unchecked, fail_on_probes):
         md.append("")
         md.append(f"<details><summary>migcheck couldn't probe {_plural(len(unchecked), 'change')}</summary>")
         md.append("")
-        for name, reason in unchecked:
-            md.append(f"- `{name}`: {_md_escape(reason[:300])}")
+        for u in unchecked:
+            md.append(f"- `{u.name}`: {_md_escape(u.reason[:300])}")
+            if u.finding and u.finding.inserts:
+                md.append(f"  {_mention(f'`{base}`', u.finding, '`')}")
         md.append("")
         md.append("</details>")
     return md

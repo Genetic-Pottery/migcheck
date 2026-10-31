@@ -365,7 +365,9 @@ For a column that now requires a value, the report lists the files with an
 insert into the table that leaves the column out, with the columns the insert
 sets. A new column can't appear in the base release, so a search for its name
 finds nothing. migcheck finds SQL `INSERT INTO` statements and query builder
-calls such as supabase-js's `.from("reminders").insert({ ... })`. It doesn't
+calls such as supabase-js's `.from("reminders").insert({ ... })`. The report
+lists these inserts for changes that migcheck couldn't probe, too, such as a
+probe whose parent row an app trigger rejects. It doesn't
 find inserts through an ORM model, such as Django's `objects.create()`. It
 can't tell an insert the code runs from an example in a string, such as SQL
 in a prompt.

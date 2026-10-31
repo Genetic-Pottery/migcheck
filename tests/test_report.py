@@ -281,10 +281,19 @@ class ProbeReportTest(unittest.TestCase):
 
     def test_unchecked_probes(self):
         code, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK],
-                               unchecked=[("nodes.x", "its required foreign keys form a cycle")])
+                               unchecked=[probes.Unchecked("nodes.x", "its required foreign keys form a cycle")])
         self.assertEqual(code, 0)
         self.assertIn("PASS: all 1 statements", out)
         self.assertIn("migcheck couldn't probe 1 change:\n    nodes.x: its required foreign keys form a cycle", out)
+
+    def test_lists_inserts_for_unchecked_probes(self):
+        stand_in = probes.Finding(probes.Probe("agents.address", probes.NEW_COLUMN, [], ("agents", "address")), "", "")
+        stand_in.inserts, stand_in.insert_files = [("supabase/functions/sync.ts", ("agent_id",))], 1
+        unchecked = [probes.Unchecked("agents.address", "the probe fails on the old schema too: [P0001] no", stand_in)]
+        _, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], unchecked=unchecked)
+        self.assertIn("    agents.address: the probe fails on the old schema too: [P0001] no\n"
+                      "        v1 inserts into agents without address in 1 file: supabase/functions/sync.ts (agent_id).\n",
+                      out)
 
     def test_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:

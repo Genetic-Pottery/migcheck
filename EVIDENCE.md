@@ -467,6 +467,42 @@ Before 0.5.0, migcheck couldn't run on Supabase's image, because the image
 doesn't make `postgres` a superuser. Replay also skipped every write that
 came through PostgREST.
 
+## Supabase edge functions
+
+These runs checked commits where a migration makes a column require a value
+and the same commit changes an edge function to set it. During a deploy, the
+workers that run the old function keep serving requests after the migration
+runs, and their inserts fail. Unlike the other results on this page, these
+runs had no workload: the projects' tests don't reach the database, so the
+workload ran one `select 1`. Only the schema probes and the insert search
+could find the breaks.
+
+The commits came from a search of GitHub for Supabase projects with edge
+functions and such migrations. Each run used `supabase/postgres:17.11.0.004`
+and a migrate command that removed `create extension pg_cron` and comments on
+Auth's tables, which today's image doesn't allow. For the `pg_cron`
+workaround, see [Supabase](RECIPES.md#supabase) in `RECIPES.md`.
+
+| Project | Commit | Migration | Result |
+|---|---|---|---|
+| [open-bsp-api](https://github.com/matiasbattocchia/open-bsp-api) | `034a9c39` | Adds `conversations_agents.organization_address text not null` | Named the edge function |
+| [paynless-framework](https://github.com/tsylvester/paynless-framework) | `88b54b93` | Adds `dialectic_sessions.stage ... NOT NULL` | Named the edge function |
+| [Atomic CRM](https://github.com/marmelab/atomic-crm) | `d6b243f3` | Adds `sales.secondary_emails jsonb not null default '[]'` | Pass, as designed |
+
+- open-bsp-api: the probe couldn't run, because an app trigger rejects the
+  parent row it inserts on both schemas. The report listed the change under
+  the changes migcheck couldn't probe, with the insert that breaks:
+  `supabase/functions/slack-management/sync.ts (organization_id,
+  conversation_id, agent_id)`. The verdict was a pass.
+- paynless-framework: the probe failed with `23502`, and the report named
+  `supabase/functions/dialectic-service/startSession.ts` with the columns its
+  insert sets. It also listed `cloneProject.ts`, whose insert columns aren't
+  written out, and 8 more files, most of them tests.
+- Atomic CRM: the new column has a default, so migcheck wrote no probe.
+- A fourth commit, pawtograder's `129daaf3`, couldn't run. The base commit's
+  schema dump calls a function without its schema, and the same commit fixes
+  it, so the history doesn't replay from scratch at that point.
+
 ## Schema probes
 
 The schema probes ran on Plane's 25 migrations, on Cal.com v5.6.20 to v5.7.12,

@@ -320,3 +320,12 @@ class ProbeReportTest(unittest.TestCase):
         _, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], found=[f])
         self.assertIn("      The table has more columns that now need a value: bio (column no longer accepts NULL).\n", out)
         self.assertIn("v1 mentions plan and users in 1 file", out)
+
+    def test_lists_inserts_that_leave_the_column_out(self):
+        f = finding(name="reminders.channel", files=(), mentions=0)
+        f.probe = probes.Probe("reminders.channel", probes.NEW_COLUMN, ["INSERT"], ("reminders", "channel"))
+        f.inserts = [("supabase/functions/remind/index.ts", ("todo_id", "remind_at")), ("src/a.ts", None)]
+        f.insert_files = 3
+        _, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], found=[f])
+        self.assertIn("      v1 inserts into reminders without channel in 3 files: "
+                      "supabase/functions/remind/index.ts (todo_id, remind_at), src/a.ts, and 1 more.\n", out)

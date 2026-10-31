@@ -45,6 +45,10 @@ class Finding:
     mentions: int = 0
     sql: str = ""  # The probe statement that failed.
     others: list = field(default_factory=list)  # [(column, kind)] the same table now needs too.
+    # For a column that now requires a value, [(file, columns or None)]: the
+    # base release's files with an insert into the table that leaves it out.
+    inserts: list = field(default_factory=list)
+    insert_files: int = 0
 
 
 def short(qualified):
@@ -108,6 +112,7 @@ def generate(old, new, dialect):
 NEW_COLUMN = "new column requires a value"
 NOT_NULL = "column no longer accepts NULL"
 NO_DEFAULT = "column lost its default"
+REQUIRES_VALUE = (NEW_COLUMN, NOT_NULL, NO_DEFAULT)
 
 
 def _change(old_col):
@@ -290,12 +295,89 @@ def _source_files(root):
     )
 
 
+IDENT = re.compile(r"[A-Za-z_$][\w$]*")
+
+
+def _string_end(text, i):
+    """Returns the index just past the string literal that starts at i."""
+    quote, i = text[i], i + 1
+    while i < len(text) and text[i] != quote:
+        i += 2 if text[i] == "\\" else 1
+    return i + 1
+
+
+def _object_keys(text, pos):
+    """Returns the keys of the object literal at text[pos], or of the first
+    object in an array literal there, or None when there's no literal or its
+    keys aren't all written out, as with a spread or a computed key."""
+    while pos < len(text) and text[pos] in " \t\r\n[":
+        pos += 1
+    if pos >= len(text) or text[pos] != "{":
+        return None
+    keys, depth, i, want_key = [], 0, pos, False
+    while i < len(text):
+        c = text[i]
+        if c in "'\"`":
+            end = _string_end(text, i)
+            if depth == 1 and want_key:
+                keys.append(text[i + 1:end - 1])
+                want_key = False
+            i = end
+            continue
+        if c in "{[(":
+            if depth == 1 and want_key:
+                return None
+            depth += 1
+            want_key = want_key or depth == 1
+        elif c in "}])":
+            depth -= 1
+            if depth == 0:
+                return tuple(keys)
+        elif depth == 1 and c == ",":
+            want_key = True
+        elif depth == 1 and want_key and not c.isspace():
+            m = IDENT.match(text, i)
+            if not m:
+                return None  # A spread, such as ...row.
+            keys.append(m.group())
+            want_key = False
+            i = m.end()
+            continue
+        i += 1
+    return None
+
+
+def insert_sites(text, table):
+    """Returns the column list of each insert into `table` in source `text`,
+    or None for an insert whose columns aren't written out. It finds SQL
+    INSERT INTO statements and query builder calls such as supabase-js's
+    .from("table").insert({...}) and Knex's knex("table").insert({...})."""
+    t = re.escape(table)
+    sites = []
+    sql = rf"""INSERT\s+INTO\s+(?:["`]?\w+["`]?\.)?["`]?{t}["`]?(?![\w$])\s*(\(([^()]*)\))?"""
+    for m in re.finditer(sql, text, re.IGNORECASE):
+        sites.append(tuple(c.strip(" \t\r\n\"`[]") for c in m.group(2).split(",")) if m.group(1) else None)
+    # The call chain ends at a semicolon or at the next .from().
+    builder = rf"""\(\s*(['"`]){t}\1\s*\)(?:(?!\.from\()[^;]){{0,200}}?\.(?:insert|upsert)\(\s*"""
+    for m in re.finditer(builder, text, re.IGNORECASE):
+        sites.append(_object_keys(text, m.end()))
+    return sites
+
+
+def _same_name(a, b):
+    return a.replace("_", "").lower() == b.replace("_", "").lower()
+
+
 def search(root, found, limit=3):
     """Fills in each finding's files: the base release's files outside
     migrations that mention its name, as written or without underscores,
     ignoring case. For a column, a file must also mention the table, by its
     name or its singular, the way models are often named. Only files that
-    git tracks count. Test files sort last."""
+    git tracks count. Test files sort last.
+
+    For a column that now requires a value, it also fills in the files with
+    an insert into the table that leaves the column out. A new column can't
+    appear in the base release, so these show what would break."""
     patterns = []
     for f in found:
         table, word = f.probe.subject or subject(f.probe.name)
@@ -305,6 +387,7 @@ def search(root, found, limit=3):
             re.compile("|".join(_forms(t) for t in sorted(tables)), re.IGNORECASE) if tables else None,
         ))
     hits = [[] for _ in found]
+    inserts = [[] for _ in found]
     for rel in _source_files(root):
         parts = rel.split("/")
         if any(SKIP_DIRS.match(d) for d in parts[:-1]) or SKIP_FILES.search(parts[-1]):
@@ -323,6 +406,20 @@ def search(root, found, limit=3):
         for i, (word, table) in enumerate(patterns):
             if word.search(text) and (table is None or table.search(text)):
                 hits[i].append(rel)
-    for f, files in zip(found, hits):
-        files.sort(key=lambda p: bool(re.search(r"(^|/)(tests?|spec|__tests__)(/|$)|[._-](test|spec)\.", p)))
+        for i, f in enumerate(found):
+            table, column = f.probe.subject or subject(f.probe.name)
+            if f.probe.kind not in REQUIRES_VALUE or not table:
+                continue
+            missing = [cols for cols in insert_sites(text, table)
+                       if cols is None or not any(_same_name(c, column) for c in cols)]
+            if missing:
+                inserts[i].append((rel, missing[0]))
+    for f, files, sites in zip(found, hits, inserts):
+        files.sort(key=lambda p: _is_test(p))
+        sites.sort(key=lambda s: _is_test(s[0]))
         f.files, f.mentions = files[:limit], len(files)
+        f.inserts, f.insert_files = sites[:limit], len(sites)
+
+
+def _is_test(path):
+    return bool(re.search(r"(^|/)(tests?|spec|__tests__)(/|$)|[._-](test|spec)\.", path))

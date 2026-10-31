@@ -307,6 +307,12 @@ def _plural(n, word):
 def _mention(base, finding, quote="", files=None):
     table, word = finding.probe.subject or probes.subject(finding.probe.name)
     word = f"{quote}{word}{quote}"
+    if finding.inserts:
+        shown = [f"{quote}{path}{quote}" + (f" ({', '.join(cols)})" if cols else "")
+                 for path, cols in finding.inserts]
+        more = f", and {finding.insert_files - len(shown)} more" if finding.insert_files > len(shown) else ""
+        return (f"{base} inserts into {quote}{table}{quote} without {word} in "
+                f"{_plural(finding.insert_files, 'file')}: {', '.join(shown)}{more}.")
     also = f" and {quote}{table}{quote}" if table else ""
     if not finding.mentions:
         return f"No file in {base} mentions {word}{also} outside its migrations."

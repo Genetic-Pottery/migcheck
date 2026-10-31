@@ -194,6 +194,54 @@ class SearchTest(unittest.TestCase):
             self.assertEqual(finding.files, ["app/models/user.rb", "test/user_test.rb"])
         self.assertEqual(finding.mentions, 2)
 
+    def test_insert_sites(self):
+        text = """
+            await admin.from('reminders').insert({ todo_id, remind_at: at, "note": n }).select().single()
+            await supabase.from("reminders").upsert([{ todo_id: 1, nested: { channel: 'x' } }])
+            await supabase.from(`reminders`).insert(rows)
+            await supabase.from('reminders').insert({ ...row, todo_id })
+            await supabase.from('reminders').insert({ [key]: 1 })
+            knex('reminders').insert({ todo_id: id })
+            supabase.from('reminders').select('*'); supabase.from('todos').insert({ task })
+            db.query('INSERT INTO public."reminders" ("todo_id", remind_at) VALUES ($1, $2)')
+            db.query("insert into reminders values (1, now())")
+            db.query("INSERT INTO reminders_archive (id) VALUES (1)")
+        """
+        self.assertEqual(probes.insert_sites(text, "reminders"), [
+            ("todo_id", "remind_at"),
+            None,
+            ("todo_id", "remind_at", "note"),
+            ("todo_id", "nested"),
+            None,
+            None,
+            None,
+            ("todo_id",),
+        ])
+
+    def test_finds_inserts_that_leave_a_new_column_out(self):
+        with tempfile.TemporaryDirectory() as root:
+            files = {
+                "supabase/functions/remind/index.ts": "admin.from('reminders').insert({ todo_id, remind_at })",
+                "src/lib/reminders.ts": "supabase.from('reminders').insert({ todo_id, channel })",
+                "test/reminders.test.ts": "INSERT INTO reminders (todo_id) VALUES (1)",
+                "src/other.ts": "supabase.from('todos').insert({ task })",
+                "supabase/migrations/2_channel.sql": "INSERT INTO reminders (todo_id) VALUES (1)",
+            }
+            for path, text in files.items():
+                os.makedirs(os.path.join(root, os.path.dirname(path)), exist_ok=True)
+                with open(os.path.join(root, path), "w") as f:
+                    f.write(text)
+            probe = probes.Probe("reminders.channel", probes.NEW_COLUMN, [""], ("reminders", "channel"))
+            dropped = probes.Probe("reminders.channel", "column dropped", [""], ("reminders", "channel"))
+            finding, other = probes.Finding(probe, "", ""), probes.Finding(dropped, "", "")
+            probes.search(root, [finding, other])
+        self.assertEqual(finding.inserts, [
+            ("supabase/functions/remind/index.ts", ("todo_id", "remind_at")),
+            ("test/reminders.test.ts", ("todo_id",)),
+        ])
+        self.assertEqual(finding.insert_files, 2)
+        self.assertEqual(other.inserts, [])
+
 
 @unittest.skipUnless(have_docker(), "needs Docker")
 class PostgresProbeTest(unittest.TestCase):

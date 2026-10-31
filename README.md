@@ -361,6 +361,13 @@ failing it. For each finding, the report lists the base release's files
 outside its migrations that mention the name. For a column, a file must also
 mention its table. To fail the run on findings, use `--fail-on-probes`.
 
+For a column that now requires a value, the report lists the files with an
+insert into the table that leaves the column out, with the columns the insert
+sets. A new column can't appear in the base release, so a search for its name
+finds nothing. migcheck finds SQL `INSERT INTO` statements and query builder
+calls such as supabase-js's `.from("reminders").insert({ ... })`. It doesn't
+find inserts through an ORM model, such as Django's `objects.create()`.
+
 Everything runs locally. The database container listens only on `127.0.0.1`,
 and migcheck removes the container and worktrees when it finishes.
 

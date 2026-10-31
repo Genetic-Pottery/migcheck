@@ -457,6 +457,8 @@ Check the following yourself before trusting a result:
   does. For each finding, open the files the report lists and check whether
   the base release still uses the name. If no file mentions it, the change is
   probably a safe drop of a column the base release stopped using. If the
+  report lists inserts that leave out a column that now requires a value,
+  those inserts fail when the base release runs them. If the
   report lists changes that migcheck couldn't probe, those tables weren't
   checked beyond the recorded statements.
 

@@ -8,6 +8,10 @@
   project has `supabase/functions`, so tests can call edge functions and
   migcheck replays their queries. The Supabase demo has an edge function and a
   `v2-edge` release that breaks it.
+- For a schema probe finding on a column that now requires a value, the
+  report lists the base release's inserts into the table that leave the
+  column out. Before, it searched for the column's name, which a new column
+  can't have in the base release, so the search found nothing.
 
 ## v0.5.0 - 2026-10-26
 

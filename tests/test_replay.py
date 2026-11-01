@@ -204,6 +204,16 @@ class PostgresReplayTest(unittest.TestCase):
         self.assertEqual(results[0][0], "23503")
         self.assertEqual(results[1], OK)
 
+    def test_deferred_foreign_keys_wait_for_the_end_of_the_block(self):
+        # Twenty inserts a workspace before the application it references,
+        # in one transaction.
+        results = self.replay([
+            Statement("INSERT INTO posts (user_id) VALUES (500)", 0, True),
+            Statement("INSERT INTO users (id) VALUES (500)", 0, True),
+            Statement("SELECT 1 FROM posts WHERE user_id = 500", 0, True),
+        ])
+        self.assertEqual(results, [OK, OK, OK])
+
     def test_truncate_skips_missing_tables(self):
         results = self.replay([
             Statement("SELECT _migcheck.truncate(ARRAY['users', 'gone']::text[], True)", 0, True),

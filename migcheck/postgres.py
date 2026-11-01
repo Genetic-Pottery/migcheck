@@ -644,6 +644,10 @@ DECLARE
   ids int[] := '{}';
   states text[] := '{}';
   msgs text[] := '{}';
+  block_ids int[];
+  block_states text[];
+  block_msgs text[];
+  deferred_ok bool;
   st text;
   msg text;
   idx text;
@@ -654,33 +658,53 @@ DECLARE
   replay_start bigint := txid_current() % 4294967296;
 BEGIN
   FOR b IN SELECT block, bool_and(keep) AS keep FROM _migcheck.stmt GROUP BY block ORDER BY block LOOP
-    -- Deferred constraints (Django's foreign keys, for example) would
-    -- otherwise fail the whole block at commit instead of failing the
-    -- statement that broke them.
-    SET CONSTRAINTS ALL IMMEDIATE;
-    -- Blocks from different sessions run one after another here, so a role
-    -- that one session set for itself mustn't reach the next block.
-    SET SESSION AUTHORIZATION DEFAULT;
-    RESET ROLE;
-    FOR s IN SELECT id, row_ids, sql FROM _migcheck.stmt WHERE block = b.block ORDER BY id LOOP
+    -- The first attempt leaves deferred constraints deferred, because apps
+    -- such as Twenty insert a row before the row its foreign key references,
+    -- and checks them at the end of the block. If that check fails, the
+    -- second attempt runs the block again with every constraint immediate,
+    -- so the statement that broke one fails instead of the whole block.
+    FOR attempt IN 1 .. 2 LOOP
+      block_ids := '{}';
+      block_states := '{}';
+      block_msgs := '{}';
       BEGIN
-        PERFORM set_config('migcheck.ids', s.row_ids, true);
-        PERFORM set_config('migcheck.pos', '0', true);
-        EXECUTE s.sql;
-        ids := array_append(ids, s.id);
-        states := array_append(states, NULL::text);
-        msgs := array_append(msgs, NULL::text);
-      EXCEPTION WHEN OTHERS THEN
-        GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE, msg = MESSAGE_TEXT, idx = CONSTRAINT_NAME;
-        IF st = '23505' AND migrated_after >= 0
-           AND _migcheck.migrated_key(s.sql, s.row_ids, idx, migrated_after, replay_start) THEN
-          msg := msg || migrated_note;
+        IF attempt = 2 THEN
+          SET CONSTRAINTS ALL IMMEDIATE;
         END IF;
-        ids := array_append(ids, s.id);
-        states := array_append(states, st);
-        msgs := array_append(msgs, msg);
+        -- Blocks from different sessions run one after another here, so a
+        -- role that one session set for itself mustn't reach the next block.
+        SET SESSION AUTHORIZATION DEFAULT;
+        RESET ROLE;
+        FOR s IN SELECT id, row_ids, sql FROM _migcheck.stmt WHERE block = b.block ORDER BY id LOOP
+          BEGIN
+            PERFORM set_config('migcheck.ids', s.row_ids, true);
+            PERFORM set_config('migcheck.pos', '0', true);
+            EXECUTE s.sql;
+            block_ids := array_append(block_ids, s.id);
+            block_states := array_append(block_states, NULL::text);
+            block_msgs := array_append(block_msgs, NULL::text);
+          EXCEPTION WHEN OTHERS THEN
+            GET STACKED DIAGNOSTICS st = RETURNED_SQLSTATE, msg = MESSAGE_TEXT, idx = CONSTRAINT_NAME;
+            IF st = '23505' AND migrated_after >= 0
+               AND _migcheck.migrated_key(s.sql, s.row_ids, idx, migrated_after, replay_start) THEN
+              msg := msg || migrated_note;
+            END IF;
+            block_ids := array_append(block_ids, s.id);
+            block_states := array_append(block_states, st);
+            block_msgs := array_append(block_msgs, msg);
+          END;
+        END LOOP;
+        SET CONSTRAINTS ALL IMMEDIATE;
+        deferred_ok := true;
+      EXCEPTION WHEN OTHERS THEN
+        -- Rolls the block back to its start.
+        deferred_ok := false;
       END;
+      EXIT WHEN deferred_ok;
     END LOOP;
+    ids := ids || block_ids;
+    states := states || block_states;
+    msgs := msgs || block_msgs;
     IF b.keep THEN
       COMMIT;
     ELSE

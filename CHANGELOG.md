@@ -21,6 +21,16 @@
   It applies a copy of them without `create extension pg_cron`, and creates
   `cron` functions that record jobs without running them.
 
+### Fixed
+
+- Postgres replay checks deferred constraints at the end of each
+  transaction, as Postgres does. Before, replay made every constraint
+  immediate, so a transaction that inserts a row before the row its
+  deferred foreign key references failed on both schemas, and migcheck
+  skipped it. Twenty creates each workspace this way. If the check at the
+  end fails, replay runs the transaction again with immediate constraints,
+  so the statement that broke the constraint still fails on its own.
+
 ## v0.5.0 - 2026-10-26
 
 ### Added

@@ -40,8 +40,13 @@ function freePort() {
 }
 
 const containers = []
+// The Edge Runtime's main service, written only when the project has edge
+// functions.
+let mainDir = null
 function stop() {
   for (const name of containers.splice(0)) execFileSync('docker', ['rm', '-f', name], { stdio: 'ignore' })
+  if (mainDir) rmSync(mainDir, { recursive: true, force: true })
+  mainDir = null
 }
 // Node skips `finally` when a signal ends it, so stop the containers here.
 for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -59,10 +64,10 @@ function start(image, env, args = [], volumes = []) {
   containers.push(name)
 }
 
-async function waitFor(url) {
+async function waitFor(url, accept = (res) => res.ok) {
   for (let i = 0; i < 100; i++) {
     try {
-      if ((await fetch(url)).ok) return
+      if (accept(await fetch(url))) return
     } catch {}
     await new Promise((r) => setTimeout(r, 200))
   }
@@ -94,22 +99,10 @@ Deno.serve(async (req) => {
 })
 `
 
-async function waitForPort(port) {
-  for (let i = 0; i < 100; i++) {
-    try {
-      await fetch(`http://127.0.0.1:${port}/`)
-      return
-    } catch {}
-    await new Promise((r) => setTimeout(r, 200))
-  }
-  throw new Error(`port ${port} didn't respond in 20 seconds`)
-}
-
 const [restPort, authPort, functionsPort, gatewayPort] = await Promise.all([freePort(), freePort(), freePort(), freePort()])
 const gatewayUrl = `http://127.0.0.1:${gatewayPort}`
 const anonKey = sign({ role: 'anon', iss: 'supabase' })
 const serviceRoleKey = sign({ role: 'service_role', iss: 'supabase' })
-const mainDir = mkdtempSync(path.join(tmpdir(), 'migcheck-stack-'))
 let exitCode = 1
 try {
   start(POSTGREST, {
@@ -140,6 +133,7 @@ try {
   // does.
   const routes = { '/rest/v1': restPort, '/auth/v1': authPort }
   if (existsSync(FUNCTIONS)) {
+    mainDir = mkdtempSync(path.join(tmpdir(), 'migcheck-stack-'))
     writeFileSync(path.join(mainDir, 'index.ts'), MAIN_SERVICE)
     start(
       EDGE_RUNTIME,
@@ -154,7 +148,7 @@ try {
     )
     routes['/functions/v1'] = functionsPort
     // The main service answers 400 when no function is named.
-    ready.push(waitForPort(functionsPort))
+    ready.push(waitFor(`http://127.0.0.1:${functionsPort}/`, () => true))
   }
   const gateway = http.createServer((req, res) => {
     const prefix = Object.keys(routes).find((p) => req.url.startsWith(p))
@@ -190,6 +184,5 @@ try {
   })
 } finally {
   stop()
-  rmSync(mainDir, { recursive: true, force: true })
 }
 process.exit(exitCode)

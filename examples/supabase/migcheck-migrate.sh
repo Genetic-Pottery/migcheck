@@ -35,13 +35,17 @@ docker run --rm --network host \
 # that use it, this applies a copy of them without their CREATE and DROP
 # EXTENSION pg_cron statements, and creates a cron schema whose functions
 # record jobs without running them. Jobs don't run during a migcheck run
-# either way.
+# either way. A migration that mentions pg_cron only in a comment doesn't
+# count.
 workdir=.
-if grep -qil pg_cron supabase/migrations/*.sql 2>/dev/null; then
+uses_cron='$t .= $_; END { $t =~ s{--[^\n]*|/\*.*?\*/}{}gs;
+  exit($t =~ /\b(create|drop)\s+extension\b[^;]*?\bpg_cron\b|\bcron\.\w+\s*\(/i ? 0 : 1) }'
+if perl -0ne "$uses_cron" supabase/migrations/*.sql 2>/dev/null; then
   workdir=$(mktemp -d)
   trap 'rm -rf "$workdir"' EXIT
   cp -R supabase "$workdir/"
-  perl -0pi -e 's/\b(create|drop)\s+extension\b[^;]*?\bpg_cron\b[^;]*;/-- $1 extension pg_cron: removed by migcheck-migrate.sh/gi' \
+  # A block comment, so the rest of the line still runs.
+  perl -0pi -e 's{\b(create|drop)\s+extension\b[^;]*?\bpg_cron\b[^;]*;}{/* $1 extension pg_cron: removed by migcheck-migrate.sh */}gi' \
     "$workdir"/supabase/migrations/*.sql
   docker run -i --rm --network host "$image" psql -q -v ON_ERROR_STOP=1 "$(url_as supabase_admin)" <<'EOF'
 create schema if not exists cron;

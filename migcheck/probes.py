@@ -61,6 +61,11 @@ class Unchecked:
     # Those inserts still show what breaks when the probe can't.
     finding: Finding = None
 
+    @property
+    def breaks(self):
+        """Whether the base release has inserts that leave out the column."""
+        return bool(self.finding and self.finding.inserts)
+
 
 def short(qualified):
     """Drops the schema from "schema.table" when it's the default one."""
@@ -106,11 +111,7 @@ def generate(old, new, dialect):
                 try:
                     statements = dialect.insert(plan(old, key, dialect, set_too))
                 except ProbeError as e:
-                    skipped.extend(
-                        Unchecked(f"{short(key)}.{c}", str(e),
-                                  Finding(Probe(f"{short(key)}.{c}", kind, [], (rel["name"], c)), "", ""))
-                        for c, kind in kinds.items()
-                    )
+                    skipped.extend(_stand_ins(short(key), rel["name"], kinds, str(e)))
                 else:
                     probes.append(Probe(f"{short(key)}.{first}", kinds[first], statements, (rel["name"], first), kinds))
     new_funcs = set(new["functions"])
@@ -122,6 +123,13 @@ def generate(old, new, dialect):
                 [f"SELECT {dialect.table(func['schema'], func['name'])}({args})"], (None, func["name"]),
             ))
     return probes, skipped
+
+
+def _stand_ins(prefix, table, kinds, reason):
+    """Returns an Unchecked change for each column in `kinds`, the columns
+    of `table` that now require a value, with a stand-in finding."""
+    return [Unchecked(f"{prefix}.{c}", reason, Finding(Probe(f"{prefix}.{c}", kind, [], (table, c)), "", ""))
+            for c, kind in kinds.items()]
 
 
 NEW_COLUMN = "new column requires a value"
@@ -236,10 +244,13 @@ def findings(probes, old, new, known, cause):
         pos += n
         failed_old = next(((st, msg) for st, msg in old_results if st is not None), None)
         if failed_old:
-            unchecked.append(Unchecked(
-                p.name, f"the probe fails on the old schema too: [{failed_old[0]}] {failed_old[1]}",
-                Finding(p, "", "") if p.kinds else None,
-            ))
+            reason = f"the probe fails on the old schema too: [{failed_old[0]}] {failed_old[1]}"
+            if p.kinds:
+                # One for each column the insert needed, as when the probe
+                # can't be written, so each column's inserts are searched.
+                unchecked.extend(_stand_ins(p.name.removesuffix(f".{p.subject[1]}"), p.subject[0], p.kinds, reason))
+            else:
+                unchecked.append(Unchecked(p.name, reason))
             continue
         failed = next(((sql, st, msg) for sql, (st, msg) in zip(p.statements, new_results) if st is not None), None)
         if failed:
@@ -277,6 +288,12 @@ SKIP_FILES = re.compile(
     r"|\.md|\.rst|\.adoc|\.txt)$",
     re.IGNORECASE,
 )
+
+
+def _bare(word):
+    """Returns `word` without underscores, in lowercase, so snake_case,
+    camelCase, and PascalCase forms of a name compare equal."""
+    return word.replace("_", "").lower()
 
 
 def _forms(word):
@@ -375,15 +392,13 @@ def insert_sites(text, table):
     sql = rf"""INSERT\s+INTO\s+(?:["`]?\w+["`]?\.)?["`]?{t}["`]?(?![\w$])\s*(\(([^()]*)\))?"""
     for m in re.finditer(sql, text, re.IGNORECASE):
         sites.append(tuple(c.strip(" \t\r\n\"`[]") for c in m.group(2).split(",")) if m.group(1) else None)
-    # The call chain ends at a semicolon or at the next .from().
-    builder = rf"""\(\s*(['"`]){t}\1\s*\)(?:(?!\.from\()[^;]){{0,200}}?\.(?:insert|upsert)\(\s*"""
+    # Only method calls, such as .returning("id"), may come between the
+    # table and the insert, so a later call on another table doesn't count.
+    args = r"\((?:[^()]|\([^()]*\))*\)"
+    builder = rf"""\(\s*(['"`]){t}\1\s*\)(?:\s*\.(?!from\b)\w+\s*{args}){{0,10}}?\s*\.(?:insert|upsert)\(\s*"""
     for m in re.finditer(builder, text, re.IGNORECASE):
         sites.append(_object_keys(text, m.end()))
     return sites
-
-
-def _same_name(a, b):
-    return a.replace("_", "").lower() == b.replace("_", "").lower()
 
 
 def search(root, found, limit=3):
@@ -396,14 +411,21 @@ def search(root, found, limit=3):
     For a column that now requires a value, it also fills in the files with
     an insert into the table that leaves the column out. A new column can't
     appear in the base release, so these show what would break."""
+    subjects = [f.probe.subject or subject(f.probe.name) for f in found]
     patterns = []
-    for f in found:
-        table, word = f.probe.subject or subject(f.probe.name)
+    for table, word in subjects:
         tables = {table, _singular(table)} if table else set()
         patterns.append((
             re.compile(_forms(word), re.IGNORECASE),
             re.compile("|".join(_forms(t) for t in sorted(tables)), re.IGNORECASE) if tables else None,
         ))
+    # Columns that now require a value: (finding's index, column, whether an
+    # insert whose columns aren't written out leaves it out). The base
+    # release can't set a new column, but it might set one that existed.
+    needs = {}
+    for i, (f, (table, column)) in enumerate(zip(found, subjects)):
+        if f.probe.kind in REQUIRES_VALUE and table:
+            needs.setdefault(table, []).append((i, _bare(column), f.probe.kind == NEW_COLUMN))
     hits = [[] for _ in found]
     inserts = [[] for _ in found]
     for rel in _source_files(root):
@@ -422,16 +444,20 @@ def search(root, found, limit=3):
             continue
         text = data.decode("utf-8", "replace")
         for i, (word, table) in enumerate(patterns):
-            if word.search(text) and (table is None or table.search(text)):
+            # A stand-in shows only its inserts, so it needs no mentions.
+            if found[i].probe.statements and word.search(text) and (table is None or table.search(text)):
                 hits[i].append(rel)
-        for i, f in enumerate(found):
-            table, column = f.probe.subject or subject(f.probe.name)
-            if f.probe.kind not in REQUIRES_VALUE or not table:
+        for table, columns in needs.items():
+            sites = insert_sites(text, table)
+            if not sites:
                 continue
-            missing = [cols for cols in insert_sites(text, table)
-                       if cols is None or not any(_same_name(c, column) for c in cols)]
-            if missing:
-                inserts[i].append((rel, missing[0]))
+            written = [(cols, {_bare(c) for c in cols}) for cols in sites if cols is not None]
+            for i, column, unwritten_too in columns:
+                missing = [cols for cols, bare in written if column not in bare]
+                if unwritten_too and None in sites:
+                    missing.append(None)
+                if missing:
+                    inserts[i].append((rel, missing[0]))
     for f, files, sites in zip(found, hits, inserts):
         files.sort(key=lambda p: _is_test(p))
         sites.sort(key=lambda s: _is_test(s[0]))

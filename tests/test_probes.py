@@ -202,7 +202,12 @@ class SearchTest(unittest.TestCase):
             await supabase.from('reminders').insert({ ...row, todo_id })
             await supabase.from('reminders').insert({ [key]: 1 })
             knex('reminders').insert({ todo_id: id })
+            knex('reminders').returning(['id', fn('x')]).insert({ remind_at })
             supabase.from('reminders').select('*'); supabase.from('todos').insert({ task })
+            const r = await knex('reminders').where({ id }).first()
+            await knex('audit').insert({ action })
+            t('reminders')
+            editor.insert(text)
             db.query('INSERT INTO public."reminders" ("todo_id", remind_at) VALUES ($1, $2)')
             db.query("insert into reminders values (1, now())")
             db.query("INSERT INTO reminders_archive (id) VALUES (1)")
@@ -216,6 +221,7 @@ class SearchTest(unittest.TestCase):
             None,
             None,
             ("todo_id",),
+            ("remind_at",),
         ])
 
     def test_finds_inserts_that_leave_a_new_column_out(self):
@@ -242,17 +248,30 @@ class SearchTest(unittest.TestCase):
         self.assertEqual(finding.insert_files, 2)
         self.assertEqual(other.inserts, [])
 
-    def test_unchecked_insert_probes_keep_a_stand_in(self):
+    def test_unwritten_columns_break_only_a_new_column(self):
+        # The base release can't set a column it doesn't know, but it might
+        # set one that existed and now can't be NULL.
+        with tempfile.TemporaryDirectory() as root:
+            with open(os.path.join(root, "app.ts"), "w") as f:
+                f.write("supabase.from('reminders').insert(payload)")
+            new = probes.Finding(probes.Probe("reminders.channel", probes.NEW_COLUMN, [], ("reminders", "channel")), "", "")
+            null = probes.Finding(probes.Probe("reminders.note", probes.NOT_NULL, [], ("reminders", "note")), "", "")
+            probes.search(root, [new, null])
+        self.assertEqual(new.inserts, [("app.ts", None)])
+        self.assertEqual(null.inserts, [])
+
+    def test_unchecked_insert_probes_keep_a_stand_in_for_each_column(self):
         probe = probes.Probe("agents.address", probes.NEW_COLUMN, ["INSERT parent", "INSERT"], ("agents", "address"),
-                             {"address": probes.NEW_COLUMN})
+                             {"address": probes.NEW_COLUMN, "region": probes.NOT_NULL})
         dropped = probes.Probe("agents.old", "column dropped", ["SELECT"], ("agents", "old"))
         trigger = ("P0001", "conversations need an address")
         found, unchecked = probes.findings([probe, dropped], [trigger, (None, None), trigger],
                                            [trigger, (None, None), trigger], set(), lambda msg, sql: None)
         self.assertEqual(found, [])
-        self.assertEqual([u.name for u in unchecked], ["agents.address", "agents.old"])
-        self.assertIs(unchecked[0].finding.probe, probe)
-        self.assertIsNone(unchecked[1].finding)
+        self.assertEqual([u.name for u in unchecked], ["agents.address", "agents.region", "agents.old"])
+        self.assertEqual([(u.finding.probe.subject, u.finding.probe.kind) for u in unchecked[:2]],
+                         [(("agents", "address"), probes.NEW_COLUMN), (("agents", "region"), probes.NOT_NULL)])
+        self.assertIsNone(unchecked[2].finding)
 
 
 @unittest.skipUnless(have_docker(), "needs Docker")

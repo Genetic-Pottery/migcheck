@@ -312,6 +312,25 @@ class ProbeReportTest(unittest.TestCase):
         self.assertIn("| `Watchlist.severity` | column dropped | 1 |", md)
         self.assertIn("`v1` mentions `severity` and `Watchlist` in 1 file: `src/watchlist.ts`.", md)
 
+    def test_markdown_shows_inserts_that_break(self):
+        stand_in = probes.Finding(probes.Probe("agents.address", probes.NEW_COLUMN, [], ("agents", "address")), "", "")
+        stand_in.inserts, stand_in.insert_files = [("sync.ts", ("agent_id",))], 1
+        unchecked = [probes.Unchecked("agents.address", "the probe fails on the old schema too", stand_in),
+                     probes.Unchecked("nodes.x", "its required foreign keys form a cycle")]
+        with tempfile.TemporaryDirectory() as tmp:
+            cli.MARKDOWN = os.path.join(tmp, "result.md")
+            run_report([Statement("SELECT 1", 0, True)], [OK], [OK], unchecked=unchecked, fail_on_probes=True)
+            with open(cli.MARKDOWN) as f:
+                md = f.read()
+        self.assertIn("### migcheck: FAIL", md)
+        self.assertIn("All 1 statements from `v1` still work after `v2`'s migrations, "
+                      "but `v1` has inserts that leave out 1 column that `v2` requires.", md)
+        self.assertIn("#### Inserts that break: `v1` leaves out 1 column that `v2` requires\n\n"
+                      "- `agents.address` (new column requires a value): "
+                      "`v1` inserts into `agents` without `address` in 1 file: `sync.ts` (agent_id).", md)
+        self.assertIn("<details><summary>migcheck couldn't probe 1 change</summary>\n\n"
+                      "- `nodes.x`: its required foreign keys form a cycle\n", md)
+
     def test_probe_errors_dont_stop_the_run(self):
         class OldServer:
             dialect = None

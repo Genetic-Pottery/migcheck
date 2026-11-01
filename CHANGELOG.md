@@ -11,9 +11,13 @@
 - For a schema probe finding on a column that now requires a value, the
   report lists the base release's inserts into the table that leave the
   column out. Before, it searched for the column's name, which a new column
-  can't have in the base release, so the search found nothing. The report
-  lists these inserts for changes that migcheck couldn't probe, too, and
-  they add a warning to a pass. With `--fail-on-probes`, they fail the run.
+  can't have in the base release, so the search found nothing. An insert
+  whose columns aren't written out, such as `.insert(payload)`, counts only
+  for a new column, because the base release might set a column that
+  existed. The report lists these inserts for changes that migcheck
+  couldn't probe, too, for each column that now requires a value, and they
+  add a warning to a pass. With `--fail-on-probes`, they fail the run. The
+  Markdown result shows them outside the collapsed list of those changes.
 - `examples/supabase/migcheck-migrate.sh` applies the Storage server's
   migrations, so migrations that create buckets in `storage.buckets` run.
 - `examples/supabase/migcheck-migrate.sh` handles migrations that use

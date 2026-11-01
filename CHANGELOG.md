@@ -31,8 +31,9 @@
   immediate, so a transaction that inserts a row before the row its
   deferred foreign key references failed on both schemas, and migcheck
   skipped it. Twenty creates each workspace this way. If the check at the
-  end fails, replay runs the transaction again with immediate constraints,
-  so the statement that broke the constraint still fails on its own.
+  end fails, replay rolls the transaction back, as Postgres does at commit,
+  and reports the error on the statement after which the check fails and
+  never passes again.
 
 ## v0.5.0 - 2026-10-26
 

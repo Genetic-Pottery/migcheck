@@ -214,6 +214,32 @@ class PostgresReplayTest(unittest.TestCase):
         ])
         self.assertEqual(results, [OK, OK, OK])
 
+    def test_a_deferred_violation_fails_only_its_statement(self):
+        # The first row relies on its deferred key until the second row
+        # arrives, so only the third row breaks the key.
+        results = self.replay([
+            Statement("INSERT INTO posts (user_id) VALUES (600)", 0, True),
+            Statement("INSERT INTO users (id) VALUES (600)", 0, True),
+            Statement("INSERT INTO posts (user_id) VALUES (999)", 0, True),
+            Statement("SELECT 1", 0, True),
+        ])
+        self.assertEqual(results[0], OK)
+        self.assertEqual(results[1], OK)
+        self.assertEqual(results[2][0], "23503")
+        self.assertEqual(results[3], OK)
+
+    def test_a_block_that_fails_its_deferred_check_leaves_no_rows(self):
+        # Postgres rolls back a transaction whose commit fails a deferred
+        # constraint, so later blocks don't see its rows.
+        results = self.replay([
+            Statement("INSERT INTO users (email) VALUES ('lost')", 0, True),
+            Statement("INSERT INTO posts (user_id) VALUES (999)", 0, True),
+            Statement("INSERT INTO users (email) VALUES ('lost')", 1, True),
+        ])
+        self.assertEqual(results[0], OK)
+        self.assertEqual(results[1][0], "23503")
+        self.assertEqual(results[2], OK)
+
     def test_truncate_skips_missing_tables(self):
         results = self.replay([
             Statement("SELECT _migcheck.truncate(ARRAY['users', 'gone']::text[], True)", 0, True),

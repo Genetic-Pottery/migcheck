@@ -648,6 +648,10 @@ DECLARE
   block_states text[];
   block_msgs text[];
   deferred_ok bool;
+  checked_ok bool;
+  blame int;
+  blame_st text;
+  blame_msg text;
   st text;
   msg text;
   idx text;
@@ -658,19 +662,21 @@ DECLARE
   replay_start bigint := txid_current() % 4294967296;
 BEGIN
   FOR b IN SELECT block, bool_and(keep) AS keep FROM _migcheck.stmt GROUP BY block ORDER BY block LOOP
-    -- The first attempt leaves deferred constraints deferred, because apps
-    -- such as Twenty insert a row before the row its foreign key references,
-    -- and checks them at the end of the block. If that check fails, the
-    -- second attempt runs the block again with every constraint immediate,
-    -- so the statement that broke one fails instead of the whole block.
+    -- Deferred constraints stay deferred, because apps such as Twenty insert
+    -- a row before the row its foreign key references, and the first
+    -- attempt checks them at the end of the block. If that check fails, the
+    -- block can't commit, as in Postgres. The second attempt runs it again
+    -- and checks the deferred constraints after each statement, then rolls
+    -- the check back. It blames the statement after which the check fails
+    -- and never passes again, so a row that waited for its reference doesn't
+    -- fail on one schema only.
     FOR attempt IN 1 .. 2 LOOP
       block_ids := '{}';
       block_states := '{}';
       block_msgs := '{}';
+      blame := NULL;
+      checked_ok := true;
       BEGIN
-        IF attempt = 2 THEN
-          SET CONSTRAINTS ALL IMMEDIATE;
-        END IF;
         -- Blocks from different sessions run one after another here, so a
         -- role that one session set for itself mustn't reach the next block.
         SET SESSION AUTHORIZATION DEFAULT;
@@ -693,14 +699,40 @@ BEGIN
             block_states := array_append(block_states, st);
             block_msgs := array_append(block_msgs, msg);
           END;
+          IF attempt = 2 THEN
+            BEGIN
+              SET CONSTRAINTS ALL IMMEDIATE;
+              -- Rolls the check back, so the constraints stay deferred.
+              RAISE EXCEPTION USING ERRCODE = 'MC001';
+            EXCEPTION
+              WHEN SQLSTATE 'MC001' THEN
+                checked_ok := true;
+              WHEN OTHERS THEN
+                IF checked_ok THEN
+                  GET STACKED DIAGNOSTICS blame_st = RETURNED_SQLSTATE, blame_msg = MESSAGE_TEXT;
+                  blame := array_length(block_ids, 1);
+                END IF;
+                checked_ok := false;
+            END;
+          END IF;
         END LOOP;
         SET CONSTRAINTS ALL IMMEDIATE;
         deferred_ok := true;
       EXCEPTION WHEN OTHERS THEN
         -- Rolls the block back to its start.
         deferred_ok := false;
+        IF blame IS NULL THEN
+          GET STACKED DIAGNOSTICS blame_st = RETURNED_SQLSTATE, blame_msg = MESSAGE_TEXT;
+        END IF;
       END;
       EXIT WHEN deferred_ok;
+      IF attempt = 2 AND array_length(block_ids, 1) > 0 THEN
+        -- No check after a statement failed, but the block still can't
+        -- commit, so its last statement takes the error.
+        blame := coalesce(blame, array_length(block_ids, 1));
+        block_states[blame] := blame_st;
+        block_msgs[blame] := blame_msg;
+      END IF;
     END LOOP;
     ids := ids || block_ids;
     states := states || block_states;

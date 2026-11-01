@@ -20,6 +20,9 @@
   `pg_cron`, which Supabase's image allows only in the `postgres` database.
   It applies a copy of them without `create extension pg_cron`, and creates
   `cron` functions that record jobs without running them.
+- `EVIDENCE.md` includes two Twenty upgrades. migcheck caught v2.54.0's
+  `isCustom` drop, which breaks v2.53.1. `RECIPES.md` shows how to set up
+  apps that create a schema for each tenant at runtime.
 
 ### Fixed
 

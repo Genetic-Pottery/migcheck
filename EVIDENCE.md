@@ -28,6 +28,7 @@ the affected results are rerun.
 | Bitwarden | Entity Framework (.NET) | Postgres | 4 | Caught all 5 breaks |
 | Cal.com | Prisma (Node) | Postgres | 3 | Caught 1 of 2 breaks; schema probes flagged the other |
 | Outline | Sequelize (Node) | Postgres | 3 | Caught the 1 break |
+| Twenty | TypeORM (Node) | Postgres | 2 | Caught the 1 break |
 
 migcheck also ran on Supabase's todo-list example, which isn't in this table.
 The example isn't a production app, and its breaking releases were written
@@ -35,6 +36,10 @@ for the test. For details, see [Supabase example](#supabase-example).
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
+
+The Twenty results come from the Unreleased code, which checks deferred
+constraints at the end of each transaction. The other Postgres results on
+this page weren't rerun with that change.
 
 The schema probes reflect migcheck 0.4.0. Their results come from the Plane
 runs and from the upgrades listed in [Schema probes](#schema-probes).
@@ -416,6 +421,50 @@ were 36 to 54 statements per run, most of the statements that migcheck
 skipped.
 
 All server tests passed in each run.
+
+## Twenty
+
+migcheck replayed Twenty's server integration tests on Postgres for two
+upgrades. The migrate command set up and seeded an empty database, and ran
+Twenty's `upgrade` command on an existing one. The tests ran in 16 shards,
+one after another.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| v2.52.0 to v2.53.0 | 381,640 | Pass |
+| v2.53.1 to v2.54.0 | 411,472 | Fail |
+
+migcheck caught the break in v2.54.0, in 18,282 statements. v2.54.0 drops
+`isCustom` from the `agent`, `skill`, `view`, `indexMetadata`, and
+`agentChatChannel` tables in the `core` schema. The comment on the drop says
+that 2.53 stopped reading the column. v2.53.1 changed the column's TypeScript
+type to `WasRemovedInUpgrade<boolean>`, but kept its `@Column` decorator, so
+TypeORM still selects and inserts it. Every query that loads a view, an
+agent, a skill, or an index fails, and so does every insert into those
+tables. 22,859 later statements in the same transactions failed on foreign
+keys to the rows those inserts didn't create.
+
+v2.53.0's instance commands add columns and tables. v2.53.0 already contains
+the `isCustom` drop, but registers it for 2.54.0, so its upgrade doesn't run
+it. migcheck passed v2.53.0.
+
+About 1.2% of the statements in each run failed on both schemas. The tests
+create custom objects and fields, which add tables and columns to a
+workspace schema. Replay drops DDL, so the statements on those tables and
+columns failed.
+
+Before the deferred constraint change, 11% of the statements failed on both
+schemas. Twenty creates a workspace and its application in one transaction,
+and the workspace's foreign key to the application is deferred. Replay made
+every constraint immediate, so the workspace insert failed, and the
+statements that depended on it failed with it. The v2.54.0 run caught the
+same break then, in 5,706 statements.
+
+Each run passed about 5,600 of 5,750 tests. Most of the tests that failed
+need services the runs didn't start: ClickHouse, and IMAP, SMTP, and CalDAV
+servers that the tests start with Testcontainers. Two tests of
+case-insensitive sorting failed, and one upgrade command test failed in its
+setup.
 
 ## Supabase example
 

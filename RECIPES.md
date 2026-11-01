@@ -201,8 +201,16 @@ migcheck --base v2.0.0 --head main \
 - Name the template so that the test suite's own cleanup doesn't drop it.
   Postgres doesn't drop a database marked as a template.
 
+- If the TypeScript type marks a column as removed but the entity still has
+  `@Column`, TypeORM still selects and inserts the column. Twenty v2.53.1
+  did this, and migcheck caught the break when v2.54.0 dropped the column.
+- If the test config loads a `.env` file with `override: true`, the file
+  replaces the `DATABASE_URL` that migcheck sets. Rewrite the file's database
+  settings from `DATABASE_URL` before each command.
+
 Tested with n8n, which reads separate `DB_POSTGRESDB_*` variables, so its
-commands ran inside a wrapper like the one above.
+commands ran inside a wrapper like the one above. Also tested with Twenty.
+For Twenty's setup, see [Apps that create schemas at runtime](#apps-that-create-schemas-at-runtime).
 
 ## Node with Prisma
 
@@ -390,6 +398,50 @@ migcheck --base v1 --head v2-rls \
 
 For each release's result, see the
 [Supabase example](EVIDENCE.md#supabase-example) in `EVIDENCE.md`.
+
+## Apps that create schemas at runtime
+
+Some apps create a schema or tables for each tenant at runtime, outside the
+migrations. Twenty creates a schema for each workspace. Replay drops DDL, so
+the tenants that the workload creates don't exist in the database that
+replay uses, and their queries fail on both schemas.
+
+To check these queries, create the tenants in the migrate command, and run
+the app's upgrade on the second run:
+
+```sh
+#!/usr/bin/env bash
+# Sets up and seeds an empty database. Upgrades a database that has one.
+set -euo pipefail
+has_core=$(psql -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'core')" "$DATABASE_URL")
+cd packages/twenty-server
+node dist/command/command.js cache:flush
+if [ "$has_core" = f ]; then
+  node dist/database/scripts/setup-db.js
+  node dist/command/command.js run-instance-commands --force --include-slow
+  node dist/command/command.js workspace:seed:dev
+else
+  node dist/command/command.js upgrade
+fi
+node dist/command/command.js cache:flush
+```
+
+- The seed runs only on the empty database, so it doesn't run twice. The
+  second run upgrades the seeded tenants, as a production upgrade does.
+- The workload runs the tests against the seeded database, without the
+  test suite's own reset.
+- Tenants and fields that the tests create at runtime still don't exist in
+  replay. In Twenty's runs, about 1.2% of the statements failed on both
+  schemas for this reason.
+- Twenty keeps a metadata cache in Redis. Flush it before and after each
+  command, and before the workload, so that no command reads a cache built
+  from another database.
+- If one test process runs out of memory on a large suite, run the suite in
+  shards, one after another. Twenty's tests ran in 16 shards with Jest's
+  `--shard` and `--forceExit`.
+
+Tested with Twenty, whose commands ran in a Node container, with Redis
+running beside it.
 
 ## Apps that migrate on startup
 

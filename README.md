@@ -57,7 +57,7 @@ apps, using each app's own test suite. For the results, see
 | xorm | Go | Postgres, MySQL | Gitea |
 | Hibernate | Java | Postgres, MySQL | Keycloak |
 | Knex | Node | MySQL | Ghost |
-| TypeORM | Node | Postgres | n8n |
+| TypeORM | Node | Postgres | n8n, Twenty |
 | Prisma | Node | Postgres | Cal.com |
 | Sequelize | Node | Postgres | Outline |
 | Diesel | Rust | Postgres | Lemmy |

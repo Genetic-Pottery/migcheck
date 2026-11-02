@@ -734,9 +734,13 @@ BEGIN
         block_msgs[blame] := blame_msg;
       END IF;
     END LOOP;
-    ids := ids || block_ids;
-    states := states || block_states;
-    msgs := msgs || block_msgs;
+    -- array_append grows the arrays in place. || copies them, which makes
+    -- replay time grow with the square of the number of blocks.
+    FOR i IN 1 .. coalesce(array_length(block_ids, 1), 0) LOOP
+      ids := array_append(ids, block_ids[i]);
+      states := array_append(states, block_states[i]);
+      msgs := array_append(msgs, block_msgs[i]);
+    END LOOP;
     IF b.keep THEN
       COMMIT;
     ELSE

@@ -4,10 +4,12 @@ These results come from running migcheck against real upgrades of open-source
 apps. Each run used the app's own test suite as the workload.
 
 migcheck 0.5.0 reran every Postgres upgrade on this page: Plane's 25
-migrations and 23 upgrades of the other apps. Each run gave the same verdict
-and the same causes as before. Statement counts differed by up to 2% from the
-earlier runs, because test suites don't run exactly the same queries each
-time. The statement counts in the tables come from the earlier runs.
+migrations and 23 upgrades of the other apps. migcheck 0.6.0, which
+checks deferred constraints at the end of each transaction, reran them again.
+Each run gave the same verdict and the same causes as before. Statement
+counts differed by up to 2% from the earlier runs, because test suites don't
+run exactly the same queries each time. The statement counts in the tables
+come from the earlier runs. The Twenty results come from 0.6.0.
 
 The MySQL results for Ghost, Gitea, and Keycloak come from migcheck 0.2.0, and
 the BookStack results come from 0.3.0. migcheck's MySQL replay hasn't changed
@@ -28,6 +30,7 @@ the affected results are rerun.
 | Bitwarden | Entity Framework (.NET) | Postgres | 4 | Caught all 5 breaks |
 | Cal.com | Prisma (Node) | Postgres | 3 | Caught 1 of 2 breaks; schema probes flagged the other |
 | Outline | Sequelize (Node) | Postgres | 3 | Caught the 1 break |
+| Twenty | TypeORM (Node) | Postgres | 2 | Caught the 1 break |
 
 migcheck also ran on Supabase's todo-list example, which isn't in this table.
 The example isn't a production app, and its breaking releases were written
@@ -417,22 +420,68 @@ skipped.
 
 All server tests passed in each run.
 
+## Twenty
+
+migcheck replayed Twenty's server integration tests on Postgres for two
+upgrades. The migrate command set up and seeded an empty database, and ran
+Twenty's `upgrade` command on an existing one. The tests ran in 16 shards,
+one after another.
+
+| Upgrade | Statements | Result |
+|---|---|---|
+| v2.52.0 to v2.53.0 | 381,640 | Pass |
+| v2.53.1 to v2.54.0 | 411,472 | Fail |
+
+migcheck caught the break in v2.54.0, in 18,282 statements. v2.54.0 drops
+`isCustom` from the `agent`, `skill`, `view`, `indexMetadata`, and
+`agentChatChannel` tables in the `core` schema. The comment on the drop says
+that 2.53 stopped reading the column. v2.53.1 changed the column's TypeScript
+type to `WasRemovedInUpgrade<boolean>`, but kept its `@Column` decorator, so
+TypeORM still selects and inserts it. Every query that loads a view, an
+agent, a skill, or an index fails, and so does every insert into those
+tables. 22,859 later statements in the same transactions failed on foreign
+keys to the rows those inserts didn't create.
+
+v2.53.0's instance commands add columns and tables. v2.53.0 already contains
+the `isCustom` drop, but registers it for 2.54.0, so its upgrade doesn't run
+it. migcheck passed v2.53.0.
+
+About 1.2% of the statements in each run failed on both schemas. The tests
+create custom objects and fields, which add tables and columns to a
+workspace schema. Replay drops DDL, so the statements on those tables and
+columns failed.
+
+Before the deferred constraint change, 11% of the statements failed on both
+schemas. Twenty creates a workspace and its application in one transaction,
+and the workspace's foreign key to the application is deferred. Replay made
+every constraint immediate, so the workspace insert failed, and the
+statements that depended on it failed with it. The v2.54.0 run caught the
+same break then, in 5,706 statements.
+
+Each run passed about 5,600 of 5,750 tests. Most of the tests that failed
+need services the runs didn't start: ClickHouse, and IMAP, SMTP, and CalDAV
+servers that the tests start with Testcontainers. Two tests of
+case-insensitive sorting failed, and one upgrade command test failed in its
+setup.
+
 ## Supabase example
 
 Supabase apps send most queries through PostgREST, which runs each request as
 the signed-in user's database role, so row-level security (RLS) policies
 apply. migcheck ran on Supabase's
 [`nextjs-todo-list`](https://github.com/supabase/supabase/tree/master/examples/todo-list/nextjs-todo-list)
-example to test the setup in [RECIPES.md](RECIPES.md#supabase). The example
-isn't a production app, and its four candidate releases were written for this
-test. These results show that the setup works, not how often migcheck catches
+example to test the setup in [RECIPES.md](RECIPES.md#supabase), with an edge
+function added. The example isn't a production app, and its five candidate
+releases were written for this test. These results show that the setup works, not how often migcheck catches
 breaks in Supabase apps.
 
 The runs used the versions that Supabase CLI 2.120.0 runs: the
-`supabase/postgres:17.11.0.004` image, PostgREST v16.4, and Supabase Auth
-v2.197.0. The workload was a test script that signs up two users with
-`supabase-js` and runs the example's queries as each of them: it lists, adds,
-toggles, and deletes todos. Each run replayed 155 statements.
+`supabase/postgres:17.11.0.004` image, PostgREST v16.4, Supabase Auth
+v2.197.0, and Edge Runtime v1.77.4. The workload was a test script that signs
+up two users with `supabase-js` and runs the example's queries as each of
+them: it lists, adds, toggles, and deletes todos. It also calls the `remind`
+edge function, which checks that the caller owns the todo and then inserts a
+reminder as `service_role`. Each run replayed 161 statements.
 
 | Release | Migration | Result |
 |---|---|---|
@@ -440,6 +489,7 @@ toggles, and deletes todos. Each run replayed 155 statements.
 | `v2-rename` | Renames `todos.is_complete` to `done` | Fail |
 | `v2-rls` | Adds lists, and a policy that allows a new todo only in one of the user's lists | Fail |
 | `v2-untested` | Drops `todos.inserted_at`, which only an untested function reads | Pass with a warning |
+| `v2-edge` | Adds `reminders.channel`, `NOT NULL`, and sets it in the `remind` function | Fail |
 
 - `v2-rename` broke 1 statement, the update that toggles a todo. The reads
   use `select('*')`, so they still work.
@@ -447,10 +497,14 @@ toggles, and deletes todos. Each run replayed 155 statements.
   the role PostgREST switched to. A workload that queries the database
   directly as `postgres` doesn't catch this break, because that role bypasses
   RLS. `v2-rls` gave the same result on the Postgres 15 image,
-  `supabase/postgres:15.19.0.004`.
+  `supabase/postgres:15.19.0.004`. The report also listed the reminder insert
+  as a later failure, because the todo that it references didn't exist.
 - `v2-untested` passed replay, because the tests never read `inserted_at`. A
   schema probe flagged the dropped column, and the report named the one file
   that mentions it, `lib/todos.mjs`.
+- `v2-edge` broke 1 statement, the old `remind` function's insert, which
+  doesn't set `channel`. This is the break that a deploy causes when the
+  migrations run before the old function's workers stop.
 
 To reproduce these runs, build the example with
 [`examples/make-supabase-demo.sh`](examples/make-supabase-demo.sh) and run the
@@ -459,6 +513,43 @@ command in [RECIPES.md](RECIPES.md#supabase).
 Before 0.5.0, migcheck couldn't run on Supabase's image, because the image
 doesn't make `postgres` a superuser. Replay also skipped every write that
 came through PostgREST.
+
+## Supabase edge functions
+
+These runs checked commits where a migration makes a column require a value
+and the same commit changes an edge function to set it. During a deploy, the
+workers that run the old function keep serving requests after the migration
+runs, and their inserts fail. Unlike the other results on this page, these
+runs had no workload: the projects' tests don't reach the database, so the
+workload ran one `select 1`. Only the schema probes and the insert search
+could find the breaks.
+
+The commits came from a search of GitHub for Supabase projects with edge
+functions and such migrations. Each run used `supabase/postgres:17.11.0.004`
+and the scripts in `examples/supabase`, which handle `pg_cron`. For details,
+see [Supabase](RECIPES.md#supabase) in `RECIPES.md`. For paynless-framework,
+the migrate command also removed comments on Auth's tables, which `postgres`
+doesn't own on today's image.
+
+| Project | Commit | Migration | Result |
+|---|---|---|---|
+| [open-bsp-api](https://github.com/matiasbattocchia/open-bsp-api) | `034a9c39` | Adds `conversations_agents.organization_address text not null` | Named the edge function |
+| [paynless-framework](https://github.com/tsylvester/paynless-framework) | `88b54b93` | Adds `dialectic_sessions.stage ... NOT NULL` | Named the edge function |
+| [Atomic CRM](https://github.com/marmelab/atomic-crm) | `d6b243f3` | Adds `sales.secondary_emails jsonb not null default '[]'` | Pass, as designed |
+
+- open-bsp-api: the probe couldn't run, because an app trigger rejects the
+  parent row it inserts on both schemas. The report listed the change under
+  the changes migcheck couldn't probe, with the insert that breaks:
+  `supabase/functions/slack-management/sync.ts (organization_id,
+  conversation_id, agent_id)`. The verdict was a pass with a warning.
+- paynless-framework: the probe failed with `23502`, and the report named
+  `supabase/functions/dialectic-service/startSession.ts` with the columns its
+  insert sets. It also listed `cloneProject.ts`, whose insert columns aren't
+  written out, and 8 more files, most of them tests.
+- Atomic CRM: the new column has a default, so migcheck wrote no probe.
+- A fourth commit, pawtograder's `129daaf3`, couldn't run. The base commit's
+  schema dump calls a function without its schema, and the same commit fixes
+  it, so the history doesn't replay from scratch at that point.
 
 ## Schema probes
 

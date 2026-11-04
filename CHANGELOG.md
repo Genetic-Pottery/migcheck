@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.6.0 - 2026-11-04
+
+### Added
+
+- `examples/supabase/migcheck-stack.mjs` starts the Edge Runtime when the
+  project has `supabase/functions`, so tests can call edge functions and
+  migcheck replays their queries. The Supabase demo has an edge function and a
+  `v2-edge` release that breaks it.
+- For a schema probe finding on a column that now requires a value, the
+  report lists the base release's inserts into the table that leave the
+  column out. Before, it searched for the column's name, which a new column
+  can't have in the base release, so the search found nothing. An insert
+  whose columns aren't written out, such as `.insert(payload)`, counts only
+  for a new column, because the base release might set a column that
+  existed. The report lists these inserts for changes that migcheck
+  couldn't probe, too, for each column that now requires a value, and they
+  add a warning to a pass. With `--fail-on-probes`, they fail the run. The
+  Markdown result shows them outside the collapsed list of those changes.
+- `examples/supabase/migcheck-migrate.sh` applies the Storage server's
+  migrations, so migrations that create buckets in `storage.buckets` run.
+- `examples/supabase/migcheck-migrate.sh` handles migrations that use
+  `pg_cron`, which Supabase's image allows only in the `postgres` database.
+  It applies a copy of them without `create extension pg_cron`, and creates
+  `cron` functions that record jobs without running them.
+- `EVIDENCE.md` includes two Twenty upgrades. migcheck caught v2.54.0's
+  `isCustom` drop, which breaks v2.53.1. `RECIPES.md` shows how to set up
+  apps that create a schema for each tenant at runtime.
+
+### Fixed
+
+- Postgres replay checks deferred constraints at the end of each
+  transaction, as Postgres does. Before, replay made every constraint
+  immediate, so a transaction that inserts a row before the row its
+  deferred foreign key references failed on both schemas, and migcheck
+  skipped it. Twenty creates each workspace this way. If the check at the
+  end fails, replay rolls the transaction back, as Postgres does at commit,
+  and reports the error on the statement after which the check fails and
+  never passes again.
+
 ## v0.5.0 - 2026-10-26
 
 ### Added

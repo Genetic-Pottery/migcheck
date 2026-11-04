@@ -45,6 +45,26 @@ class Finding:
     mentions: int = 0
     sql: str = ""  # The probe statement that failed.
     others: list = field(default_factory=list)  # [(column, kind)] the same table now needs too.
+    # For a column that now requires a value, [(file, columns or None)]: the
+    # base release's files with an insert into the table that leaves it out.
+    inserts: list = field(default_factory=list)
+    insert_files: int = 0
+
+
+@dataclass
+class Unchecked:
+    """A change that migcheck couldn't probe."""
+    name: str
+    reason: str
+    # For a column that now requires a value, a stand-in finding that
+    # search() fills in with the base release's inserts that leave it out.
+    # Those inserts still show what breaks when the probe can't.
+    finding: Finding = None
+
+    @property
+    def breaks(self):
+        """Whether the base release has inserts that leave out the column."""
+        return bool(self.finding and self.finding.inserts)
 
 
 def short(qualified):
@@ -55,8 +75,8 @@ def short(qualified):
 
 def generate(old, new, dialect):
     """Returns (probes, skipped) for the changes from catalog `old` to catalog
-    `new`. `skipped` lists (name, reason) for changes that migcheck couldn't
-    write a probe for."""
+    `new`. `skipped` lists an Unchecked for each change that migcheck
+    couldn't write a probe for."""
     probes, skipped = [], []
     old_rels, new_rels = old["relations"], new["relations"]
     for key, rel in old_rels.items():
@@ -91,7 +111,7 @@ def generate(old, new, dialect):
                 try:
                     statements = dialect.insert(plan(old, key, dialect, set_too))
                 except ProbeError as e:
-                    skipped.extend((f"{short(key)}.{c}", str(e)) for c in kinds)
+                    skipped.extend(_stand_ins(short(key), rel["name"], kinds, str(e)))
                 else:
                     probes.append(Probe(f"{short(key)}.{first}", kinds[first], statements, (rel["name"], first), kinds))
     new_funcs = set(new["functions"])
@@ -105,9 +125,17 @@ def generate(old, new, dialect):
     return probes, skipped
 
 
+def _stand_ins(prefix, table, kinds, reason):
+    """Returns an Unchecked change for each column in `kinds`, the columns
+    of `table` that now require a value, with a stand-in finding."""
+    return [Unchecked(f"{prefix}.{c}", reason, Finding(Probe(f"{prefix}.{c}", kind, [], (table, c)), "", ""))
+            for c, kind in kinds.items()]
+
+
 NEW_COLUMN = "new column requires a value"
 NOT_NULL = "column no longer accepts NULL"
 NO_DEFAULT = "column lost its default"
+REQUIRES_VALUE = (NEW_COLUMN, NOT_NULL, NO_DEFAULT)
 
 
 def _change(old_col):
@@ -216,7 +244,13 @@ def findings(probes, old, new, known, cause):
         pos += n
         failed_old = next(((st, msg) for st, msg in old_results if st is not None), None)
         if failed_old:
-            unchecked.append((p.name, f"the probe fails on the old schema too: [{failed_old[0]}] {failed_old[1]}"))
+            reason = f"the probe fails on the old schema too: [{failed_old[0]}] {failed_old[1]}"
+            if p.kinds:
+                # One for each column the insert needed, as when the probe
+                # can't be written, so each column's inserts are searched.
+                unchecked.extend(_stand_ins(p.name.removesuffix(f".{p.subject[1]}"), p.subject[0], p.kinds, reason))
+            else:
+                unchecked.append(Unchecked(p.name, reason))
             continue
         failed = next(((sql, st, msg) for sql, (st, msg) in zip(p.statements, new_results) if st is not None), None)
         if failed:
@@ -256,6 +290,12 @@ SKIP_FILES = re.compile(
 )
 
 
+def _bare(word):
+    """Returns `word` without underscores, in lowercase, so snake_case,
+    camelCase, and PascalCase forms of a name compare equal."""
+    return word.replace("_", "").lower()
+
+
 def _forms(word):
     """Returns a pattern for `word` as written or without underscores,
     ignoring case, so it matches snake_case, camelCase, and PascalCase."""
@@ -290,21 +330,104 @@ def _source_files(root):
     )
 
 
+IDENT = re.compile(r"[A-Za-z_$][\w$]*")
+
+
+def _string_end(text, i):
+    """Returns the index just past the string literal that starts at i."""
+    quote, i = text[i], i + 1
+    while i < len(text) and text[i] != quote:
+        i += 2 if text[i] == "\\" else 1
+    return i + 1
+
+
+def _object_keys(text, pos):
+    """Returns the keys of the object literal at text[pos], or of the first
+    object in an array literal there, or None when there's no literal or its
+    keys aren't all written out, as with a spread or a computed key."""
+    while pos < len(text) and text[pos] in " \t\r\n[":
+        pos += 1
+    if pos >= len(text) or text[pos] != "{":
+        return None
+    keys, depth, i, want_key = [], 0, pos, False
+    while i < len(text):
+        c = text[i]
+        if c in "'\"`":
+            end = _string_end(text, i)
+            if depth == 1 and want_key:
+                keys.append(text[i + 1:end - 1])
+                want_key = False
+            i = end
+            continue
+        if c in "{[(":
+            if depth == 1 and want_key:
+                return None
+            depth += 1
+            want_key = want_key or depth == 1
+        elif c in "}])":
+            depth -= 1
+            if depth == 0:
+                return tuple(keys)
+        elif depth == 1 and c == ",":
+            want_key = True
+        elif depth == 1 and want_key and not c.isspace():
+            m = IDENT.match(text, i)
+            if not m:
+                return None  # A spread, such as ...row.
+            keys.append(m.group())
+            want_key = False
+            i = m.end()
+            continue
+        i += 1
+    return None
+
+
+def insert_sites(text, table):
+    """Returns the column list of each insert into `table` in source `text`,
+    or None for an insert whose columns aren't written out. It finds SQL
+    INSERT INTO statements and query builder calls such as supabase-js's
+    .from("table").insert({...}) and Knex's knex("table").insert({...})."""
+    t = re.escape(table)
+    sites = []
+    sql = rf"""INSERT\s+INTO\s+(?:["`]?\w+["`]?\.)?["`]?{t}["`]?(?![\w$])\s*(\(([^()]*)\))?"""
+    for m in re.finditer(sql, text, re.IGNORECASE):
+        sites.append(tuple(c.strip(" \t\r\n\"`[]") for c in m.group(2).split(",")) if m.group(1) else None)
+    # Only method calls, such as .returning("id"), may come between the
+    # table and the insert, so a later call on another table doesn't count.
+    args = r"\((?:[^()]|\([^()]*\))*\)"
+    builder = rf"""\(\s*(['"`]){t}\1\s*\)(?:\s*\.(?!from\b)\w+\s*{args}){{0,10}}?\s*\.(?:insert|upsert)\(\s*"""
+    for m in re.finditer(builder, text, re.IGNORECASE):
+        sites.append(_object_keys(text, m.end()))
+    return sites
+
+
 def search(root, found, limit=3):
     """Fills in each finding's files: the base release's files outside
     migrations that mention its name, as written or without underscores,
     ignoring case. For a column, a file must also mention the table, by its
     name or its singular, the way models are often named. Only files that
-    git tracks count. Test files sort last."""
+    git tracks count. Test files sort last.
+
+    For a column that now requires a value, it also fills in the files with
+    an insert into the table that leaves the column out. A new column can't
+    appear in the base release, so these show what would break."""
+    subjects = [f.probe.subject or subject(f.probe.name) for f in found]
     patterns = []
-    for f in found:
-        table, word = f.probe.subject or subject(f.probe.name)
+    for table, word in subjects:
         tables = {table, _singular(table)} if table else set()
         patterns.append((
             re.compile(_forms(word), re.IGNORECASE),
             re.compile("|".join(_forms(t) for t in sorted(tables)), re.IGNORECASE) if tables else None,
         ))
+    # Columns that now require a value: (finding's index, column, whether an
+    # insert whose columns aren't written out leaves it out). The base
+    # release can't set a new column, but it might set one that existed.
+    needs = {}
+    for i, (f, (table, column)) in enumerate(zip(found, subjects)):
+        if f.probe.kind in REQUIRES_VALUE and table:
+            needs.setdefault(table, []).append((i, _bare(column), f.probe.kind == NEW_COLUMN))
     hits = [[] for _ in found]
+    inserts = [[] for _ in found]
     for rel in _source_files(root):
         parts = rel.split("/")
         if any(SKIP_DIRS.match(d) for d in parts[:-1]) or SKIP_FILES.search(parts[-1]):
@@ -321,8 +444,26 @@ def search(root, found, limit=3):
             continue
         text = data.decode("utf-8", "replace")
         for i, (word, table) in enumerate(patterns):
-            if word.search(text) and (table is None or table.search(text)):
+            # A stand-in shows only its inserts, so it needs no mentions.
+            if found[i].probe.statements and word.search(text) and (table is None or table.search(text)):
                 hits[i].append(rel)
-    for f, files in zip(found, hits):
-        files.sort(key=lambda p: bool(re.search(r"(^|/)(tests?|spec|__tests__)(/|$)|[._-](test|spec)\.", p)))
+        for table, columns in needs.items():
+            sites = insert_sites(text, table)
+            if not sites:
+                continue
+            written = [(cols, {_bare(c) for c in cols}) for cols in sites if cols is not None]
+            for i, column, unwritten_too in columns:
+                missing = [cols for cols, bare in written if column not in bare]
+                if unwritten_too and None in sites:
+                    missing.append(None)
+                if missing:
+                    inserts[i].append((rel, missing[0]))
+    for f, files, sites in zip(found, hits, inserts):
+        files.sort(key=lambda p: _is_test(p))
+        sites.sort(key=lambda s: _is_test(s[0]))
         f.files, f.mentions = files[:limit], len(files)
+        f.inserts, f.insert_files = sites[:limit], len(sites)
+
+
+def _is_test(path):
+    return bool(re.search(r"(^|/)(tests?|spec|__tests__|e2e|fixtures?)(/|$)|[._-](test|spec)\.", path))

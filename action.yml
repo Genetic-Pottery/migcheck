@@ -34,8 +34,9 @@ inputs:
     default: "false"
   fail-on-probes:
     description: >-
-      Whether a failing schema probe fails the job. By default, schema probes
-      that fail add a warning to a pass.
+      Whether a failing schema probe, or an insert that leaves out a column
+      a change migcheck couldn't probe requires, fails the job. By default,
+      they add a warning to a pass.
     default: "false"
   working-directory:
     description: Directory of the git repository to check.

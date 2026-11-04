@@ -201,8 +201,16 @@ migcheck --base v2.0.0 --head main \
 - Name the template so that the test suite's own cleanup doesn't drop it.
   Postgres doesn't drop a database marked as a template.
 
+- If the TypeScript type marks a column as removed but the entity still has
+  `@Column`, TypeORM still selects and inserts the column. Twenty v2.53.1
+  did this, and migcheck caught the break when v2.54.0 dropped the column.
+- If the test config loads a `.env` file with `override: true`, the file
+  replaces the `DATABASE_URL` that migcheck sets. Rewrite the file's database
+  settings from `DATABASE_URL` before each command.
+
 Tested with n8n, which reads separate `DB_POSTGRESDB_*` variables, so its
-commands ran inside a wrapper like the one above.
+commands ran inside a wrapper like the one above. Also tested with Twenty.
+For Twenty's setup, see [Apps that create schemas at runtime](#apps-that-create-schemas-at-runtime).
 
 ## Node with Prisma
 
@@ -333,16 +341,26 @@ migcheck --base v1.0.0 --head main \
   --workload "node scripts/migcheck-stack.mjs npm test"
 ```
 
-- `migcheck-migrate.sh` applies the Auth server's migrations and then
-  `supabase/migrations`, as `supabase start` does. Without the Auth server's
-  migrations, `auth.uid()` reads an older JWT setting, and every RLS check
-  fails.
+- `migcheck-migrate.sh` applies the Auth and Storage servers' migrations and
+  then `supabase/migrations`, as `supabase start` does. Without the Auth
+  server's migrations, `auth.uid()` reads an older JWT setting, and every RLS
+  check fails. Without the Storage server's, migrations that create buckets
+  in `storage.buckets` fail.
 - `migcheck-stack.mjs` starts PostgREST, the Auth server, and a gateway on
   `DATABASE_URL`, then runs your tests with `SUPABASE_URL`,
   `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` set. Your tests must
   read these variables instead of pointing at `supabase start`.
+- If your project has `supabase/functions`, `migcheck-stack.mjs` also starts
+  the Edge Runtime and serves each function at `/functions/v1/<name>`, as
+  `supabase start` does. The functions get the same variables, plus
+  `SUPABASE_DB_URL`. Unlike `supabase start`, the gateway doesn't verify the
+  JWT before it calls a function.
+- To check edge functions, call them from your tests. During a deploy, the
+  workers that run the old functions keep serving requests after the new
+  migrations run. migcheck replays the queries that the base release's
+  functions made, whether they went through PostgREST or connected directly.
 - Use the image versions your Supabase CLI runs, in `--image` and in both
-  scripts. To list them, run `supabase start` and then `docker ps`.
+  scripts. This includes the Edge Runtime version. To list them, run `supabase start` and then `docker ps`.
 - Run the queries you want checked through PostgREST, with `supabase-js`.
   PostgREST switches to the signed-in user's role, and replay does the same,
   so a migration that changes an RLS policy can break the replayed writes.
@@ -356,9 +374,18 @@ migcheck --base v1.0.0 --head main \
 The scripts don't start the Storage server, so a workload that uploads files
 doesn't run.
 
+Supabase's image allows `pg_cron` only in the `postgres` database, and
+migcheck migrates into a database of its own. So for migrations that use
+`pg_cron`, `migcheck-migrate.sh` applies a copy of them without their
+`create extension` and `drop extension` statements for it. It creates a
+`cron` schema whose `schedule`, `unschedule`, and `alter_job` functions record
+jobs in `cron.job` without running them. Jobs don't run during a migcheck run
+either way. Your checkout's migrations aren't changed.
+
 To try the setup, build the Supabase demo. It's the todo list from Supabase's
-`nextjs-todo-list` example, with one base release and four candidate
-releases. It needs Node.js and npm.
+`nextjs-todo-list` example plus an edge function, with one base release and
+five candidate releases. It needs Node.js and npm. The edge function loads
+`supabase-js` from npm, so the workload needs network access.
 
 ```sh
 examples/make-supabase-demo.sh /tmp/mc-supabase-demo
@@ -371,6 +398,50 @@ migcheck --base v1 --head v2-rls \
 
 For each release's result, see the
 [Supabase example](EVIDENCE.md#supabase-example) in `EVIDENCE.md`.
+
+## Apps that create schemas at runtime
+
+Some apps create a schema or tables for each tenant at runtime, outside the
+migrations. Twenty creates a schema for each workspace. Replay drops DDL, so
+the tenants that the workload creates don't exist in the database that
+replay uses, and their queries fail on both schemas.
+
+To check these queries, create the tenants in the migrate command, and run
+the app's upgrade on the second run:
+
+```sh
+#!/usr/bin/env bash
+# Sets up and seeds an empty database. Upgrades a database that has one.
+set -euo pipefail
+has_core=$(psql -tAc "SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'core')" "$DATABASE_URL")
+cd packages/twenty-server
+node dist/command/command.js cache:flush
+if [ "$has_core" = f ]; then
+  node dist/database/scripts/setup-db.js
+  node dist/command/command.js run-instance-commands --force --include-slow
+  node dist/command/command.js workspace:seed:dev
+else
+  node dist/command/command.js upgrade
+fi
+node dist/command/command.js cache:flush
+```
+
+- The seed runs only on the empty database, so it doesn't run twice. The
+  second run upgrades the seeded tenants, as a production upgrade does.
+- The workload runs the tests against the seeded database, without the
+  test suite's own reset.
+- Tenants and fields that the tests create at runtime still don't exist in
+  replay. In Twenty's runs, about 1.2% of the statements failed on both
+  schemas for this reason.
+- Twenty keeps a metadata cache in Redis. Flush it before and after each
+  command, and before the workload, so that no command reads a cache built
+  from another database.
+- If one test process runs out of memory on a large suite, run the suite in
+  shards, one after another. Twenty's tests ran in 16 shards with Jest's
+  `--shard` and `--forceExit`.
+
+Tested with Twenty, whose commands ran in a Node container, with Redis
+running beside it.
 
 ## Apps that migrate on startup
 
@@ -447,6 +518,8 @@ Check the following yourself before trusting a result:
   does. For each finding, open the files the report lists and check whether
   the base release still uses the name. If no file mentions it, the change is
   probably a safe drop of a column the base release stopped using. If the
+  report lists inserts that leave out a column that now requires a value,
+  those inserts fail when the base release runs them. If the
   report lists changes that migcheck couldn't probe, those tables weren't
   checked beyond the recorded statements.
 

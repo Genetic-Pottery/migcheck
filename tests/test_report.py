@@ -281,10 +281,25 @@ class ProbeReportTest(unittest.TestCase):
 
     def test_unchecked_probes(self):
         code, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK],
-                               unchecked=[("nodes.x", "its required foreign keys form a cycle")])
+                               unchecked=[probes.Unchecked("nodes.x", "its required foreign keys form a cycle")])
         self.assertEqual(code, 0)
         self.assertIn("PASS: all 1 statements", out)
         self.assertIn("migcheck couldn't probe 1 change:\n    nodes.x: its required foreign keys form a cycle", out)
+
+    def test_lists_inserts_for_unchecked_probes(self):
+        stand_in = probes.Finding(probes.Probe("agents.address", probes.NEW_COLUMN, [], ("agents", "address")), "", "")
+        stand_in.inserts, stand_in.insert_files = [("supabase/functions/sync.ts", ("agent_id",))], 1
+        unchecked = [probes.Unchecked("agents.address", "the probe fails on the old schema too: [P0001] no", stand_in)]
+        _, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], unchecked=unchecked)
+        self.assertIn("    agents.address: the probe fails on the old schema too: [P0001] no\n"
+                      "        v1 inserts into agents without address in 1 file: supabase/functions/sync.ts (agent_id).\n",
+                      out)
+        self.assertIn("PASS WITH WARNING: all 1 statements from v1 still work after v2's migrations, "
+                      "but v1 has inserts that leave out 1 column that v2 requires.", out)
+        self.assertIn("To fail the run on these inserts and on schema probes, use --fail-on-probes.", out)
+        code, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], unchecked=unchecked, fail_on_probes=True)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL: all 1 statements from v1 still work", out)
 
     def test_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -296,6 +311,25 @@ class ProbeReportTest(unittest.TestCase):
         self.assertIn("#### Schema probes: 1 change might break `v1`", md)
         self.assertIn("| `Watchlist.severity` | column dropped | 1 |", md)
         self.assertIn("`v1` mentions `severity` and `Watchlist` in 1 file: `src/watchlist.ts`.", md)
+
+    def test_markdown_shows_inserts_that_break(self):
+        stand_in = probes.Finding(probes.Probe("agents.address", probes.NEW_COLUMN, [], ("agents", "address")), "", "")
+        stand_in.inserts, stand_in.insert_files = [("sync.ts", ("agent_id",))], 1
+        unchecked = [probes.Unchecked("agents.address", "the probe fails on the old schema too", stand_in),
+                     probes.Unchecked("nodes.x", "its required foreign keys form a cycle")]
+        with tempfile.TemporaryDirectory() as tmp:
+            cli.MARKDOWN = os.path.join(tmp, "result.md")
+            run_report([Statement("SELECT 1", 0, True)], [OK], [OK], unchecked=unchecked, fail_on_probes=True)
+            with open(cli.MARKDOWN) as f:
+                md = f.read()
+        self.assertIn("### migcheck: FAIL", md)
+        self.assertIn("All 1 statements from `v1` still work after `v2`'s migrations, "
+                      "but `v1` has inserts that leave out 1 column that `v2` requires.", md)
+        self.assertIn("#### Inserts that break: `v1` leaves out 1 column that `v2` requires\n\n"
+                      "- `agents.address` (new column requires a value): "
+                      "`v1` inserts into `agents` without `address` in 1 file: `sync.ts` (agent_id).", md)
+        self.assertIn("<details><summary>migcheck couldn't probe 1 change</summary>\n\n"
+                      "- `nodes.x`: its required foreign keys form a cycle\n", md)
 
     def test_probe_errors_dont_stop_the_run(self):
         class OldServer:
@@ -320,3 +354,12 @@ class ProbeReportTest(unittest.TestCase):
         _, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], found=[f])
         self.assertIn("      The table has more columns that now need a value: bio (column no longer accepts NULL).\n", out)
         self.assertIn("v1 mentions plan and users in 1 file", out)
+
+    def test_lists_inserts_that_leave_the_column_out(self):
+        f = finding(name="reminders.channel", files=(), mentions=0)
+        f.probe = probes.Probe("reminders.channel", probes.NEW_COLUMN, ["INSERT"], ("reminders", "channel"))
+        f.inserts = [("supabase/functions/remind/index.ts", ("todo_id", "remind_at")), ("src/a.ts", None)]
+        f.insert_files = 3
+        _, out = run_report([Statement("SELECT 1", 0, True)], [OK], [OK], found=[f])
+        self.assertIn("      v1 inserts into reminders without channel in 3 files: "
+                      "supabase/functions/remind/index.ts (todo_id, remind_at), src/a.ts, and 1 more.\n", out)

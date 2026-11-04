@@ -4,12 +4,12 @@ These results come from running migcheck against real upgrades of open-source
 apps. Each run used the app's own test suite as the workload.
 
 migcheck 0.5.0 reran every Postgres upgrade on this page: Plane's 25
-migrations and 23 upgrades of the other apps. The Unreleased code, which
+migrations and 23 upgrades of the other apps. migcheck 0.6.0, which
 checks deferred constraints at the end of each transaction, reran them again.
 Each run gave the same verdict and the same causes as before. Statement
 counts differed by up to 2% from the earlier runs, because test suites don't
 run exactly the same queries each time. The statement counts in the tables
-come from the earlier runs. The Twenty results come from the Unreleased code.
+come from the earlier runs. The Twenty results come from 0.6.0.
 
 The MySQL results for Ghost, Gitea, and Keycloak come from migcheck 0.2.0, and
 the BookStack results come from 0.3.0. migcheck's MySQL replay hasn't changed

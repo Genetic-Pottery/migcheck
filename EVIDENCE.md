@@ -4,10 +4,12 @@ These results come from running migcheck against real upgrades of open-source
 apps. Each run used the app's own test suite as the workload.
 
 migcheck 0.5.0 reran every Postgres upgrade on this page: Plane's 25
-migrations and 23 upgrades of the other apps. Each run gave the same verdict
-and the same causes as before. Statement counts differed by up to 2% from the
-earlier runs, because test suites don't run exactly the same queries each
-time. The statement counts in the tables come from the earlier runs.
+migrations and 23 upgrades of the other apps. The Unreleased code, which
+checks deferred constraints at the end of each transaction, reran them again.
+Each run gave the same verdict and the same causes as before. Statement
+counts differed by up to 2% from the earlier runs, because test suites don't
+run exactly the same queries each time. The statement counts in the tables
+come from the earlier runs. The Twenty results come from the Unreleased code.
 
 The MySQL results for Ghost, Gitea, and Keycloak come from migcheck 0.2.0, and
 the BookStack results come from 0.3.0. migcheck's MySQL replay hasn't changed
@@ -36,10 +38,6 @@ for the test. For details, see [Supabase example](#supabase-example).
 
 The n8n run raised the only false alarm left after the fix described in the
 Mastodon section. For details, see the n8n section.
-
-The Twenty results come from the Unreleased code, which checks deferred
-constraints at the end of each transaction. The other Postgres results on
-this page weren't rerun with that change.
 
 The schema probes reflect migcheck 0.4.0. Their results come from the Plane
 runs and from the upgrades listed in [Schema probes](#schema-probes).
